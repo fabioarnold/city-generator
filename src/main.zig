@@ -5,6 +5,14 @@ const la = @import("linear_algebra.zig");
 const tiles = @import("tiles/tiles.zig");
 const vec4 = la.vec4;
 
+const GLTile = struct {
+    vbo: gl.uint,
+    ebo: gl.uint,
+    ibo: gl.uint,
+    index_count: gl.sizei,
+    instance_count: gl.sizei,
+};
+
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     var arena_instance: std.heap.ArenaAllocator = .init(gpa.allocator());
@@ -35,25 +43,7 @@ pub fn main() !void {
     gl.BindVertexArray(vao_dummy);
 
     const tile_array = [_]tiles.Tile{ tiles.street, tiles.curb };
-    var vertex_data_offsets: std.ArrayList(u32) = try .initCapacity(arena, tile_array.len);
-    var index_data_offsets: std.ArrayList(u32) = try .initCapacity(arena, tile_array.len);
-    const vertex_data_total, const index_data_total = blk: {
-        var vertex_data_count: u32 = 0;
-        var index_data_count: u32 = 0;
-        for (&tile_array) |tile| {
-            vertex_data_offsets.appendAssumeCapacity(vertex_data_count);
-            index_data_offsets.appendAssumeCapacity(index_data_count);
-            vertex_data_count += @intCast(tile.vertex_data.len);
-            index_data_count += @intCast(tile.index_data.len);
-        }
-        break :blk .{ vertex_data_count, index_data_count };
-    };
-    var vertex_data: std.ArrayList(f32) = try .initCapacity(arena, vertex_data_total);
-    var index_data: std.ArrayList(u16) = try .initCapacity(arena, index_data_total);
-    inline for (&tile_array) |tile| {
-        vertex_data.appendSliceAssumeCapacity(tile.vertex_data);
-        index_data.appendSliceAssumeCapacity(tile.index_data);
-    }
+    var gl_tiles: [tile_array.len]GLTile = undefined;
 
     const tilemap: [4][4]u8 = .{
         .{ 0, 0, 2, 0 },
@@ -63,29 +53,36 @@ pub fn main() !void {
     };
 
     // per tile instance data
-    var instance_data: [tile_array.len]std.ArrayList(vec4) = undefined;
-    for (&instance_data) |*i| i.* = .init(arena);
+    var tile_instance_data: [tile_array.len]std.ArrayList(vec4) = undefined;
+    for (&tile_instance_data) |*i| i.* = .init(arena);
     for (0..tilemap.len) |row| {
         for (0..tilemap[row].len) |col| {
             const i = tilemap[row][col];
             if (i == 0) continue;
-            try instance_data[i - 1].append(.{ @floatFromInt(col), @floatFromInt(row), 0, 0 });
+            try tile_instance_data[i - 1].append(.{ @floatFromInt(col), @floatFromInt(row), 0, 0 });
         }
     }
 
-    var vbo: gl.uint = undefined;
-    gl.GenBuffers(1, @ptrCast(&vbo));
-    gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.BufferData(gl.ARRAY_BUFFER, @intCast(vertex_data.items.len * @sizeOf(f32)), vertex_data.items.ptr, gl.STATIC_DRAW);
-    var ebo: gl.uint = undefined;
-    gl.GenBuffers(1, @ptrCast(&ebo));
-    gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
-    gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @intCast(index_data.items.len * @sizeOf(u16)), index_data.items.ptr, gl.STATIC_DRAW);
-    var ibos: [instance_data.len]gl.uint = undefined;
+    var vbos: [gl_tiles.len]gl.uint = undefined;
+    var ebos: [gl_tiles.len]gl.uint = undefined;
+    var ibos: [gl_tiles.len]gl.uint = undefined;
+    gl.GenBuffers(vbos.len, &vbos);
+    gl.GenBuffers(ebos.len, &ebos);
     gl.GenBuffers(ibos.len, &ibos);
-    for (&instance_data, ibos) |id, ibo| {
+    for (&gl_tiles, tile_array, tile_instance_data, vbos, ebos, ibos) |*gl_tile, tile, instance_data, vbo, ebo, ibo| {
+        gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.BufferData(gl.ARRAY_BUFFER, @intCast(tile.vertex_data.len * @sizeOf(f32)), tile.vertex_data.ptr, gl.STATIC_DRAW);
+        gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+        gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @intCast(tile.index_data.len * @sizeOf(u16)), tile.index_data.ptr, gl.STATIC_DRAW);
         gl.BindBuffer(gl.ARRAY_BUFFER, ibo);
-        gl.BufferData(gl.ARRAY_BUFFER, @intCast(id.items.len * @sizeOf(vec4)), id.items.ptr, gl.STATIC_DRAW);
+        gl.BufferData(gl.ARRAY_BUFFER, @intCast(instance_data.items.len * @sizeOf(vec4)), instance_data.items.ptr, gl.STATIC_DRAW);
+        gl_tile.* = .{
+            .vbo = vbo,
+            .ebo = ebo,
+            .ibo = ibo,
+            .index_count = @intCast(tile.index_data.len),
+            .instance_count = @intCast(instance_data.items.len),
+        };
     }
 
     var texture: gl.uint = undefined;
@@ -151,19 +148,18 @@ pub fn main() !void {
         gl.Clear(gl.COLOR_BUFFER_BIT);
 
         gl.UseProgram(shader);
-        gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
         gl.EnableVertexAttribArray(0);
-        gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 5 * @sizeOf(f32), 0);
         gl.EnableVertexAttribArray(1);
-        gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, 5 * @sizeOf(f32), 3 * @sizeOf(f32));
-        for (0.., ibos, &instance_data) |i, ibo, id| {
-            _ = i;
-            gl.BindBuffer(gl.ARRAY_BUFFER, ibo);
-            gl.EnableVertexAttribArray(2);
+        gl.EnableVertexAttribArray(2);
+        gl.VertexAttribDivisor(2, 1);
+        for (gl_tiles) |gl_tile| {
+            gl.BindBuffer(gl.ARRAY_BUFFER, gl_tile.vbo);
+            gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 5 * @sizeOf(f32), 0);
+            gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, 5 * @sizeOf(f32), 3 * @sizeOf(f32));
+            gl.BindBuffer(gl.ARRAY_BUFFER, gl_tile.ibo);
             gl.VertexAttribPointer(2, 4, gl.FLOAT, gl.FALSE, 4 * @sizeOf(f32), 0);
-            gl.VertexAttribDivisor(2, 1);
-            gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
-            gl.DrawElementsInstanced(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, null, @intCast(id.items.len));
+            gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl_tile.ebo);
+            gl.DrawElementsInstanced(gl.TRIANGLES, gl_tile.index_count, gl.UNSIGNED_SHORT, null, gl_tile.instance_count);
         }
 
         try sdl.video.gl.swapWindow(window);
