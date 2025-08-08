@@ -36,6 +36,24 @@ pub fn perspective_x(fovx_degrees: f32, aspect_ratio: f32, z_near: f32) mat4 {
     };
 }
 
+pub fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) mat4 {
+    const right_left = right - left;
+    const top_bottom = top - bottom;
+    const far_near = far - near;
+
+    return mat4{
+        .{ 2 / right_left, 0, 0, 0 },
+        .{ 0, 2 / top_bottom, 0, 0 },
+        .{ 0, 0, -2 / far_near, 0 },
+        .{
+            -(right + left) / right_left,
+            -(top + bottom) / top_bottom,
+            -(far + near) / far_near,
+            1,
+        },
+    };
+}
+
 pub fn look_at(eye: vec3, center: vec3, up: vec3) mat4 {
     const f = normalize(vec3, center - eye);
     const s = normalize(vec3, cross(f, up));

@@ -37,19 +37,21 @@ pub fn main() !void {
     }.address);
     gl.makeProcTableCurrent(&procs);
 
+    gl.Enable(gl.DEPTH_TEST);
+
     // VAO is required for OpenGL core profile.
     var vao_dummy: gl.uint = undefined;
     gl.GenVertexArrays(1, @ptrCast(&vao_dummy));
     gl.BindVertexArray(vao_dummy);
 
-    const tile_array = [_]tiles.Tile{ tiles.street, tiles.curb };
+    const tile_array = [_]tiles.Tile{ tiles.street, tiles.street_zebra, tiles.curb, tiles.wall };
     var gl_tiles: [tile_array.len]GLTile = undefined;
 
     const tilemap: [4][4]u8 = .{
-        .{ 0, 0, 2, 0 },
-        .{ 0, 1, 2, 0 },
-        .{ 0, 1, 2, 1 },
-        .{ 0, 1, 2, 0 },
+        .{ 0, 2, 3, 4 },
+        .{ 0, 1, 3, 4 },
+        .{ 0, 1, 3, 4 },
+        .{ 0, 1, 3, 4 },
     };
 
     // per tile instance data
@@ -94,17 +96,25 @@ pub fn main() !void {
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    const shader = gl.CreateProgram();
+    const shader = struct {
+        var program: gl.uint = undefined;
+        var projection_loc: gl.int = undefined;
+        var view_loc: gl.int = undefined;
+    };
+
+    shader.program = gl.CreateProgram();
     const shader_vs = gl.CreateShader(gl.VERTEX_SHADER);
     const shader_vs_src =
         \\#version 410
+        \\uniform mat4 u_projection;
+        \\uniform mat4 u_view;
         \\layout(location = 0) in vec3 a_position;
         \\layout(location = 1) in vec2 a_texcoord;
         \\layout(location = 2) in vec4 a_transform;
         \\out vec2 v_texcoord;
         \\void main() {
         \\  v_texcoord = a_texcoord / vec2(64.0, 168.0);
-        \\  gl_Position = vec4((a_position/8.0 + a_transform.xyz - vec3(2.0,2.0,0.0)) * vec3(0.2, 0.4, 1.0), 1.0);
+        \\  gl_Position = u_projection * u_view * vec4(a_position/8.0 + a_transform.xyz, 1.0);
         \\}
     ;
     gl.ShaderSource(shader_vs, 1, &.{shader_vs_src}, null);
@@ -123,17 +133,17 @@ pub fn main() !void {
     var info_buffer: [10_000]u8 = undefined;
     var info_len: gl.int = undefined;
     gl.GetShaderInfoLog(shader_vs, info_buffer.len, &info_len, &info_buffer);
-    std.debug.print("compile log:\n{s}\n", .{info_buffer[0..@intCast(info_len)]});
-    gl.AttachShader(shader, shader_vs);
+    if (info_len > 0) std.debug.print("compile log:\n{s}\n", .{info_buffer[0..@intCast(info_len)]});
+    gl.AttachShader(shader.program, shader_vs);
     gl.ShaderSource(shader_fs, 1, &.{shader_fs_src}, null);
     gl.CompileShader(shader_fs);
     gl.GetShaderInfoLog(shader_fs, info_buffer.len, &info_len, &info_buffer);
-    std.debug.print("compile log:\n{s}\n", .{info_buffer[0..@intCast(info_len)]});
-    gl.AttachShader(shader, shader_fs);
-    gl.LinkProgram(shader);
-    gl.UseProgram(shader);
-
-    // const projection = la.ortho();
+    if (info_len > 0) std.debug.print("compile log:\n{s}\n", .{info_buffer[0..@intCast(info_len)]});
+    gl.AttachShader(shader.program, shader_fs);
+    gl.LinkProgram(shader.program);
+    gl.UseProgram(shader.program);
+    shader.projection_loc = gl.GetUniformLocation(shader.program, "u_projection");
+    shader.view_loc = gl.GetUniformLocation(shader.program, "u_view");
 
     mainloop: while (true) {
         while (sdl.events.poll()) |event| {
@@ -144,10 +154,16 @@ pub fn main() !void {
             }
         }
 
-        gl.ClearColor(0.2, 0.4, 0.6, 1);
-        gl.Clear(gl.COLOR_BUFFER_BIT);
+        // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
+        const projection = la.perspective(45, 6.4 / 3.6, 0.1);
+        const view = la.look_at(.{ -1, -1, 2 }, .{ 2, 2, 0 }, .{ 0, 0, 1 });
 
-        gl.UseProgram(shader);
+        gl.ClearColor(0.2, 0.4, 0.6, 1);
+        gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        gl.UseProgram(shader.program);
+        gl.UniformMatrix4fv(shader.projection_loc, 1, gl.FALSE, @ptrCast(&projection));
+        gl.UniformMatrix4fv(shader.view_loc, 1, gl.FALSE, @ptrCast(&view));
         gl.EnableVertexAttribArray(0);
         gl.EnableVertexAttribArray(1);
         gl.EnableVertexAttribArray(2);
