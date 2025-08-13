@@ -3,6 +3,7 @@ const sdl = @import("sdl3");
 const gl = @import("gl");
 const la = @import("linear_algebra.zig");
 const tiles = @import("tiles/tiles.zig");
+const tile_data = @import("tiles/tile_data.zig");
 const vec4 = la.vec4;
 
 const GLTile = struct {
@@ -13,6 +14,12 @@ const GLTile = struct {
     instance_count: gl.sizei,
 };
 
+const Tile = packed struct(u8) {
+    index: u6,
+    rot: u2,
+};
+var tilemap: [64][64]Tile = undefined;
+
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     var arena_instance: std.heap.ArenaAllocator = .init(gpa.allocator());
@@ -21,7 +28,7 @@ pub fn main() !void {
     try sdl.init(.{ .video = true });
     defer sdl.shutdown();
 
-    const window = try sdl.video.Window.init("City", 1280, 720, .{ .open_gl = true, .resizable = true });
+    const window = try sdl.video.Window.init("City", 1280, 720, .{ .open_gl = true, .resizable = true, .high_pixel_density = true });
     defer window.deinit();
 
     try sdl.video.gl.setAttribute(.context_minor_version, 1);
@@ -29,39 +36,75 @@ pub fn main() !void {
     const context = try sdl.video.gl.Context.init(window);
     defer context.deinit() catch {};
 
+    try sdl.video.gl.setSwapInterval(.vsync);
+
     var procs: gl.ProcTable = undefined;
     _ = procs.init(struct {
         fn address(proc: [*:0]const u8) ?*align(4) const anyopaque {
-            return @alignCast(@ptrCast(sdl.video.gl.getProcAddress(std.mem.sliceTo(proc, 0))));
+            return @ptrCast(@alignCast(sdl.video.gl.getProcAddress(std.mem.sliceTo(proc, 0))));
         }
     }.address);
     gl.makeProcTableCurrent(&procs);
 
+    // Set up reverse Z: https://tomhultonharrop.com/mathematics/graphics/2023/08/06/reverse-z.html
     gl.Enable(gl.DEPTH_TEST);
+    gl.DepthFunc(gl.GREATER);
+    gl.ClearDepth(0);
 
     // VAO is required for OpenGL core profile.
     var vao_dummy: gl.uint = undefined;
     gl.GenVertexArrays(1, @ptrCast(&vao_dummy));
     gl.BindVertexArray(vao_dummy);
 
-    const tile_array = [_]tiles.Tile{ tiles.street, tiles.street_zebra, tiles.curb, tiles.wall };
+    const tile_array = tile_data.tiles;
     var gl_tiles: [tile_array.len]GLTile = undefined;
 
-    const tilemap: [4][4]u8 = .{
-        .{ 0, 2, 3, 4 },
-        .{ 0, 1, 3, 4 },
-        .{ 0, 1, 3, 4 },
-        .{ 0, 1, 3, 4 },
-    };
+    tilemap = @splat(@splat(.{ .index = 1, .rot = 0 }));
+    // do city block
+    {
+        const w = 8;
+        const h = 8;
+        const street_side = 2;
+        const street_zebra = 3;
+        const curb = 5;
+        const curb_corner = 6;
+        for (0..h) |y| {
+            for (0..w) |x| {
+                tilemap[28 + y][28 + x].index = 0;
+            }
+        }
+        for (0..w) |x| {
+            const street_tile: u6 = if (x == 0 or x == w - 1) street_zebra else street_side;
+            tilemap[25][28 + x] = .{ .index = street_tile, .rot = 1 };
+            tilemap[26][28 + x] = .{ .index = street_tile, .rot = 1 };
+            tilemap[27][28 + x] = .{ .index = curb, .rot = 3 };
+            tilemap[36][28 + x] = .{ .index = curb, .rot = 1 };
+            tilemap[37][28 + x] = .{ .index = street_tile, .rot = 1 };
+            tilemap[38][28 + x] = .{ .index = street_tile, .rot = 1 };
+        }
+        for (0..h) |y| {
+            const street_tile: u6 = if (y == 0 or y == h - 1) street_zebra else street_side;
+            tilemap[28 + y][25] = .{ .index = street_tile, .rot = 0 };
+            tilemap[28 + y][26] = .{ .index = street_tile, .rot = 0 };
+            tilemap[28 + y][27] = .{ .index = curb, .rot = 0 };
+            tilemap[28 + y][36] = .{ .index = curb, .rot = 2 };
+            tilemap[28 + y][37] = .{ .index = street_tile, .rot = 0 };
+            tilemap[28 + y][38] = .{ .index = street_tile, .rot = 0 };
+        }
+        tilemap[27][27] = .{ .index = curb_corner, .rot = 3 };
+        tilemap[27][36] = .{ .index = curb_corner, .rot = 2 };
+        tilemap[36][36] = .{ .index = curb_corner, .rot = 1 };
+        tilemap[36][27] = .{ .index = curb_corner, .rot = 0 };
+    }
 
     // per tile instance data
     var tile_instance_data: [tile_array.len]std.ArrayList(vec4) = undefined;
     for (&tile_instance_data) |*i| i.* = .init(arena);
     for (0..tilemap.len) |row| {
         for (0..tilemap[row].len) |col| {
-            const i = tilemap[row][col];
-            if (i == 0) continue;
-            try tile_instance_data[i - 1].append(.{ @floatFromInt(col), @floatFromInt(row), 0, 0 });
+            const tile = tilemap[row][col];
+            if (tile.index == 0) continue;
+            try tile_instance_data[tile.index - 1].append(.{ @floatFromInt(col), @floatFromInt(row), 0, @floatFromInt(tile.rot) });
         }
     }
 
@@ -109,12 +152,25 @@ pub fn main() !void {
         \\uniform mat4 u_projection;
         \\uniform mat4 u_view;
         \\layout(location = 0) in vec3 a_position;
-        \\layout(location = 1) in vec2 a_texcoord;
-        \\layout(location = 2) in vec4 a_transform;
+        \\layout(location = 1) in vec3 a_normal;
+        \\layout(location = 2) in vec2 a_texcoord;
+        \\layout(location = 3) in vec4 a_transform;
+        \\out vec3 v_normal;
         \\out vec2 v_texcoord;
         \\void main() {
+        \\  v_normal = a_normal;
+        \\  float rot = a_transform.w;
+        \\  vec3 pos = a_position/8.0;
+        \\  if (rot == 1) {
+        \\    pos.xy = vec2(pos.y, 1-pos.x);
+        \\  } else if (rot == 2) {
+        \\    pos.xy = vec2(1-pos.x, 1-pos.y);
+        \\  } else if (rot == 3) {
+        \\    pos.xy = vec2(1-pos.y, pos.x);
+        \\  }
+        \\  pos += a_transform.xyz;
         \\  v_texcoord = a_texcoord / vec2(64.0, 168.0);
-        \\  gl_Position = u_projection * u_view * vec4(a_position/8.0 + a_transform.xyz, 1.0);
+        \\  gl_Position = u_projection * u_view * vec4(pos, 1.0);
         \\}
     ;
     gl.ShaderSource(shader_vs, 1, &.{shader_vs_src}, null);
@@ -156,7 +212,7 @@ pub fn main() !void {
 
         // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
         const projection = la.perspective(45, 6.4 / 3.6, 0.1);
-        const view = la.look_at(.{ -1, -1, 2 }, .{ 2, 2, 0 }, .{ 0, 0, 1 });
+        const view = la.look_at(.{ 32, 32 - 8, 16 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
 
         gl.ClearColor(0.2, 0.4, 0.6, 1);
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -167,13 +223,15 @@ pub fn main() !void {
         gl.EnableVertexAttribArray(0);
         gl.EnableVertexAttribArray(1);
         gl.EnableVertexAttribArray(2);
-        gl.VertexAttribDivisor(2, 1);
+        gl.EnableVertexAttribArray(3);
+        gl.VertexAttribDivisor(3, 1);
         for (gl_tiles) |gl_tile| {
             gl.BindBuffer(gl.ARRAY_BUFFER, gl_tile.vbo);
-            gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 5 * @sizeOf(f32), 0);
-            gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, 5 * @sizeOf(f32), 3 * @sizeOf(f32));
+            gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 8 * @sizeOf(f32), 0);
+            gl.VertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 8 * @sizeOf(f32), 3 * @sizeOf(f32));
+            gl.VertexAttribPointer(2, 2, gl.FLOAT, gl.FALSE, 8 * @sizeOf(f32), 6 * @sizeOf(f32));
             gl.BindBuffer(gl.ARRAY_BUFFER, gl_tile.ibo);
-            gl.VertexAttribPointer(2, 4, gl.FLOAT, gl.FALSE, 4 * @sizeOf(f32), 0);
+            gl.VertexAttribPointer(3, 4, gl.FLOAT, gl.FALSE, 4 * @sizeOf(f32), 0);
             gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl_tile.ebo);
             gl.DrawElementsInstanced(gl.TRIANGLES, gl_tile.index_count, gl.UNSIGNED_SHORT, null, gl_tile.instance_count);
         }

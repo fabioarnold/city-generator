@@ -51,6 +51,17 @@ pub const curb: Tile = .{
     },
 };
 
+pub const curb_corner: Tile = .{
+    .vertex_data = &[_]f32{
+        4, 4, 0, 28, 28,
+        4, 0, 0, 24, 24,
+        0, 4, 0, 24, 24,
+    },
+    .index_data = &[_]u16{
+        0, 1, 2,
+    },
+};
+
 pub const wall: Tile = .{
     .vertex_data = &[_]f32{
         0, 0, 0, 32, 48,
@@ -60,5 +71,20 @@ pub const wall: Tile = .{
     },
     .index_data = &[_]u16{
         0, 1, 2, 0, 2, 3,
+    },
+};
+
+pub const wall_corner: Tile = .{
+    .vertex_data = &[_]f32{
+        0, 0, 0, 32, 48,
+        0, 0, 8, 32, 56,
+        0, 8, 0, 40, 48,
+        0, 8, 8, 40, 56,
+        8, 0, 0, 40, 48,
+        8, 0, 8, 40, 56,
+    },
+    .index_data = &[_]u16{
+        0, 1, 2, 1, 2, 3,
+        0, 1, 4, 1, 4, 5,
     },
 };
