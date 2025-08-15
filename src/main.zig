@@ -15,6 +15,7 @@ const mul = la.mul;
 const input = struct {
     var mx: f32 = 0;
     var my: f32 = 0;
+    var framedown: bool = false;
 };
 
 const GLTile = struct {
@@ -30,6 +31,27 @@ const Tile = packed struct(u8) {
     rot: u2,
 };
 var tilemap: [64][64]Tile = undefined;
+
+const tile_array = tile_data.tiles;
+var gl_tiles: [tile_array.len]GLTile = undefined;
+var tile_instance_data: [tile_array.len]std.ArrayList(vec4) = undefined;
+
+fn update_instance_data() !void {
+    for (&tile_instance_data) |*i| i.clearRetainingCapacity();
+    for (0..tilemap.len) |row| {
+        for (0..tilemap[row].len) |col| {
+            const tile = tilemap[row][col];
+            if (tile.index == 0) continue;
+            try tile_instance_data[tile.index - 1].append(.{ @floatFromInt(col), @floatFromInt(row), 0, @floatFromInt(tile.rot) });
+        }
+    }
+
+    for (&gl_tiles, &tile_instance_data) |*gl_tile, *instance_data| {
+        gl.BindBuffer(gl.ARRAY_BUFFER, gl_tile.ibo);
+        gl.BufferData(gl.ARRAY_BUFFER, @intCast(instance_data.items.len * @sizeOf(vec4)), instance_data.items.ptr, gl.DYNAMIC_DRAW);
+        gl_tile.instance_count = @intCast(instance_data.items.len);
+    }
+}
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -66,9 +88,6 @@ pub fn main() !void {
     var vao_dummy: gl.uint = undefined;
     gl.GenVertexArrays(1, @ptrCast(&vao_dummy));
     gl.BindVertexArray(vao_dummy);
-
-    const tile_array = tile_data.tiles;
-    var gl_tiles: [tile_array.len]GLTile = undefined;
 
     tilemap = @splat(@splat(.{ .index = 1, .rot = 0 }));
     // do city block
@@ -109,7 +128,6 @@ pub fn main() !void {
     }
 
     // per tile instance data
-    var tile_instance_data: [tile_array.len]std.ArrayList(vec4) = undefined;
     for (&tile_instance_data) |*i| i.* = .init(arena);
     for (0..tilemap.len) |row| {
         for (0..tilemap[row].len) |col| {
@@ -154,6 +172,7 @@ pub fn main() !void {
     debug_draw.init();
 
     mainloop: while (true) {
+        input.framedown = false;
         while (sdl.events.poll()) |event| {
             switch (event) {
                 .quit => break :mainloop,
@@ -161,6 +180,9 @@ pub fn main() !void {
                 .mouse_motion => |mouse| {
                     input.mx = mouse.x;
                     input.my = mouse.y;
+                },
+                .mouse_button_down => |mouse| {
+                    input.framedown = mouse.button == .left;
                 },
                 else => {},
             }
@@ -195,6 +217,17 @@ pub fn main() !void {
             const t = -origin[2] / dir[2]; // intersect z = 0
             break :blk origin + @as(vec3, @splat(t)) * dir;
         };
+
+        if (input.framedown) {
+            const x: i32 = @intFromFloat(@round(cursor_pos[0] - 0.5));
+            const y: i32 = @intFromFloat(@round(cursor_pos[1] - 0.5));
+            if (x >= 0 and x < 64 and y >= 0 and y < 64) {
+                const row: usize = @intCast(y);
+                const col: usize = @intCast(x);
+                tilemap[row][col] = .{ .index = 4, .rot = 0 };
+                try update_instance_data();
+            }
+        }
 
         gl.Viewport(0, 0, @intCast(pixel_size.width), @intCast(pixel_size.height));
         gl.ClearColor(0.2, 0.4, 0.6, 1);
