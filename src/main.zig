@@ -7,7 +7,10 @@ const debug_draw = @import("debug_draw.zig");
 const la = @import("linear_algebra.zig");
 const tiles = @import("tiles/tiles.zig");
 const tile_data = @import("tiles/tile_data.zig");
+const vec3 = la.vec3;
 const vec4 = la.vec4;
+const mat4 = la.mat4;
+const mul = la.mul;
 
 const input = struct {
     var mx: f32 = 0;
@@ -163,10 +166,37 @@ pub fn main() !void {
             }
         }
 
-        // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
-        const projection = la.perspective(45, 6.4 / 3.6, 0.1);
-        const view = la.look_at(.{ 32, 32 - 8, 32 + 48 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
+        const window_size = try window.getSize();
+        const pixel_size = try window.getSizeInPixels();
 
+        // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
+        const aspect_ratio = f32_i(window_size.width) / f32_i(window_size.height);
+        const projection = la.perspective(45, aspect_ratio, 0.1);
+        const view = la.look_at(.{ 32, 32 - 8, 16 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
+
+        // screen to world
+        const cursor_pos = blk: {
+            const ndc_near: vec4 = .{
+                2 * input.mx / f32_i(window_size.width) - 1,
+                1 - 2 * input.my / f32_i(window_size.height),
+                -1,
+                1,
+            };
+            const ndc_far: vec4 = .{ ndc_near[0], ndc_near[1], -ndc_near[2], ndc_near[3] };
+
+            const inv = la.invert(mul(projection, view)).?;
+            var world_near = la.mul_vector(inv, ndc_near);
+            var world_far = la.mul_vector(inv, ndc_far);
+            world_near /= @splat(world_near[3]); // div by w
+            world_far /= @splat(world_far[3]); // div by w
+
+            const origin = la.vec3_from_vec4(world_near);
+            const dir = la.normalize(vec3, la.vec3_from_vec4(world_far - world_near));
+            const t = -origin[2] / dir[2]; // intersect z = 0
+            break :blk origin + @as(vec3, @splat(t)) * dir;
+        };
+
+        gl.Viewport(0, 0, @intCast(pixel_size.width), @intCast(pixel_size.height));
         gl.ClearColor(0.2, 0.4, 0.6, 1);
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -194,10 +224,14 @@ pub fn main() !void {
             gl.Disable(gl.DEPTH_TEST);
             defer gl.Enable(gl.DEPTH_TEST);
 
-            debug_draw.begin(projection, view);
-            debug_draw.quad();
+            debug_draw.begin(&projection, &view);
+            debug_draw.quad(&la.translation(@round(cursor_pos[0] - 0.5), @round(cursor_pos[1] - 0.5), 0));
         }
 
         try sdl.video.gl.swapWindow(window);
     }
+}
+
+fn f32_i(int: anytype) f32 {
+    return @floatFromInt(int);
 }

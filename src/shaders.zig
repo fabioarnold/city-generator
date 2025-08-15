@@ -12,6 +12,7 @@ pub const debug_shader = struct {
     pub var program: gl.uint = undefined;
     pub var projection_loc: gl.int = undefined;
     pub var view_loc: gl.int = undefined;
+    pub var model_loc: gl.int = undefined;
 };
 
 pub fn load() void {
@@ -26,6 +27,7 @@ pub fn load() void {
         gl.UseProgram(debug_shader.program);
         debug_shader.projection_loc = gl.GetUniformLocation(debug_shader.program, "u_projection");
         debug_shader.view_loc = gl.GetUniformLocation(debug_shader.program, "u_view");
+        debug_shader.model_loc = gl.GetUniformLocation(debug_shader.program, "u_model");
     }
 }
 
