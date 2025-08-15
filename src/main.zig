@@ -84,6 +84,10 @@ pub fn main() !void {
     gl.DepthFunc(gl.GREATER);
     gl.ClearDepth(0);
 
+    // Blending
+    gl.Enable(gl.BLEND);
+    gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
     // VAO is required for OpenGL core profile.
     var vao_dummy: gl.uint = undefined;
     gl.GenVertexArrays(1, @ptrCast(&vao_dummy));
@@ -194,7 +198,7 @@ pub fn main() !void {
         // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
         const aspect_ratio = f32_i(window_size.width) / f32_i(window_size.height);
         const projection = la.perspective(45, aspect_ratio, 0.1);
-        const view = la.look_at(.{ 32, 32 - 8, 16 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
+        const view = la.look_at(.{ 32 + 8, 32 - 8, 16 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
 
         // screen to world
         const cursor_pos = blk: {
