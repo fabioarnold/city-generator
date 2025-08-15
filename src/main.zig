@@ -1,10 +1,18 @@
 const std = @import("std");
+const log = std.log.scoped(.main);
 const sdl = @import("sdl3");
 const gl = @import("gl");
+const shaders = @import("shaders.zig");
+const debug_draw = @import("debug_draw.zig");
 const la = @import("linear_algebra.zig");
 const tiles = @import("tiles/tiles.zig");
 const tile_data = @import("tiles/tile_data.zig");
 const vec4 = la.vec4;
+
+const input = struct {
+    var mx: f32 = 0;
+    var my: f32 = 0;
+};
 
 const GLTile = struct {
     vbo: gl.uint,
@@ -139,87 +147,32 @@ pub fn main() !void {
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    const shader = struct {
-        var program: gl.uint = undefined;
-        var projection_loc: gl.int = undefined;
-        var view_loc: gl.int = undefined;
-    };
-
-    shader.program = gl.CreateProgram();
-    const shader_vs = gl.CreateShader(gl.VERTEX_SHADER);
-    const shader_vs_src =
-        \\#version 410
-        \\uniform mat4 u_projection;
-        \\uniform mat4 u_view;
-        \\layout(location = 0) in vec3 a_position;
-        \\layout(location = 1) in vec3 a_normal;
-        \\layout(location = 2) in vec2 a_texcoord;
-        \\layout(location = 3) in vec4 a_transform;
-        \\out vec3 v_normal;
-        \\out vec2 v_texcoord;
-        \\void main() {
-        \\  v_normal = a_normal;
-        \\  float rot = a_transform.w;
-        \\  vec3 pos = a_position/8.0;
-        \\  if (rot == 1) {
-        \\    pos.xy = vec2(pos.y, 1-pos.x);
-        \\  } else if (rot == 2) {
-        \\    pos.xy = vec2(1-pos.x, 1-pos.y);
-        \\  } else if (rot == 3) {
-        \\    pos.xy = vec2(1-pos.y, pos.x);
-        \\  }
-        \\  pos += a_transform.xyz;
-        \\  v_texcoord = a_texcoord / vec2(64.0, 168.0);
-        \\  gl_Position = u_projection * u_view * vec4(pos, 1.0);
-        \\}
-    ;
-    gl.ShaderSource(shader_vs, 1, &.{shader_vs_src}, null);
-    const shader_fs = gl.CreateShader(gl.FRAGMENT_SHADER);
-    const shader_fs_src =
-        \\#version 410
-        \\uniform sampler2D colormap;
-        \\in vec2 v_texcoord;
-        \\out vec4 out_color;
-        \\void main() {
-        \\  out_color = texture(colormap, v_texcoord);
-        \\  if (out_color.a == 0) discard;
-        \\}
-    ;
-    gl.CompileShader(shader_vs);
-    var info_buffer: [10_000]u8 = undefined;
-    var info_len: gl.int = undefined;
-    gl.GetShaderInfoLog(shader_vs, info_buffer.len, &info_len, &info_buffer);
-    if (info_len > 0) std.debug.print("compile log:\n{s}\n", .{info_buffer[0..@intCast(info_len)]});
-    gl.AttachShader(shader.program, shader_vs);
-    gl.ShaderSource(shader_fs, 1, &.{shader_fs_src}, null);
-    gl.CompileShader(shader_fs);
-    gl.GetShaderInfoLog(shader_fs, info_buffer.len, &info_len, &info_buffer);
-    if (info_len > 0) std.debug.print("compile log:\n{s}\n", .{info_buffer[0..@intCast(info_len)]});
-    gl.AttachShader(shader.program, shader_fs);
-    gl.LinkProgram(shader.program);
-    gl.UseProgram(shader.program);
-    shader.projection_loc = gl.GetUniformLocation(shader.program, "u_projection");
-    shader.view_loc = gl.GetUniformLocation(shader.program, "u_view");
+    shaders.load();
+    debug_draw.init();
 
     mainloop: while (true) {
         while (sdl.events.poll()) |event| {
             switch (event) {
                 .quit => break :mainloop,
                 .key_down => |key| if (key.key == .escape) break :mainloop,
+                .mouse_motion => |mouse| {
+                    input.mx = mouse.x;
+                    input.my = mouse.y;
+                },
                 else => {},
             }
         }
 
         // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
         const projection = la.perspective(45, 6.4 / 3.6, 0.1);
-        const view = la.look_at(.{ 32, 32 - 8, 16 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
+        const view = la.look_at(.{ 32, 32 - 8, 32 + 48 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
 
         gl.ClearColor(0.2, 0.4, 0.6, 1);
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-        gl.UseProgram(shader.program);
-        gl.UniformMatrix4fv(shader.projection_loc, 1, gl.FALSE, @ptrCast(&projection));
-        gl.UniformMatrix4fv(shader.view_loc, 1, gl.FALSE, @ptrCast(&view));
+        gl.UseProgram(shaders.tile_shader.program);
+        gl.UniformMatrix4fv(shaders.tile_shader.projection_loc, 1, gl.FALSE, @ptrCast(&projection));
+        gl.UniformMatrix4fv(shaders.tile_shader.view_loc, 1, gl.FALSE, @ptrCast(&view));
         gl.EnableVertexAttribArray(0);
         gl.EnableVertexAttribArray(1);
         gl.EnableVertexAttribArray(2);
@@ -234,6 +187,15 @@ pub fn main() !void {
             gl.VertexAttribPointer(3, 4, gl.FLOAT, gl.FALSE, 4 * @sizeOf(f32), 0);
             gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl_tile.ebo);
             gl.DrawElementsInstanced(gl.TRIANGLES, gl_tile.index_count, gl.UNSIGNED_SHORT, null, gl_tile.instance_count);
+        }
+
+        // draw quad
+        {
+            gl.Disable(gl.DEPTH_TEST);
+            defer gl.Enable(gl.DEPTH_TEST);
+
+            debug_draw.begin(projection, view);
+            debug_draw.quad();
         }
 
         try sdl.video.gl.swapWindow(window);
