@@ -3,6 +3,7 @@ const log = std.log.scoped(.main);
 const sdl = @import("sdl3");
 const gl = @import("gl");
 const shaders = @import("shaders.zig");
+const gfx = @import("gfx.zig");
 const debug_draw = @import("debug_draw.zig");
 const la = @import("linear_algebra.zig");
 const tiles = @import("tiles/tiles.zig");
@@ -190,6 +191,7 @@ pub fn main() !void {
 
     shaders.load();
     debug_draw.init();
+    gfx.init(arena);
 
     camera.position = .{ 32 + 8, 32 - 8, 16 };
     camera.phi = -45;
@@ -282,6 +284,7 @@ pub fn main() !void {
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
         gl.UseProgram(shaders.tile_shader.program);
+        gl.BindTexture(gl.TEXTURE_2D, texture);
         gl.UniformMatrix4fv(shaders.tile_shader.projection_loc, 1, gl.FALSE, @ptrCast(&projection));
         gl.UniformMatrix4fv(shaders.tile_shader.view_loc, 1, gl.FALSE, @ptrCast(&view));
         gl.EnableVertexAttribArray(0);
@@ -300,8 +303,8 @@ pub fn main() !void {
             gl.DrawElementsInstanced(gl.TRIANGLES, gl_tile.index_count, gl.UNSIGNED_SHORT, null, gl_tile.instance_count);
         }
 
-        // draw cursor highlight quad
         {
+            // draw cursor highlight quad
             gl.Disable(gl.DEPTH_TEST);
             defer gl.Enable(gl.DEPTH_TEST);
 
@@ -310,6 +313,16 @@ pub fn main() !void {
             const tile_y = @round(cursor_pos[1] - 0.5);
             const model = la.mul(la.translation(tile_x, tile_y, 0), la.scale(1, 1, 1));
             debug_draw.quad(&model);
+
+            const ortho = la.ortho(0, f32_i(window_size.width), f32_i(window_size.height), 0, -1, 1);
+            gfx.begin(&ortho, &la.identity());
+            gfx.transform(&la.scale(2, 2, 1));
+            gfx.set_color(.{ 0, 0, 0, 1 });
+            gfx.draw_rect(8 - 1, 8 - 1, 96 + 2, 344 + 2);
+            gfx.set_color(.{ 0.95, 0.95, 0.95, 1 });
+            gfx.draw_rect(8, 8, 96, 344);
+            gfx.set_color(.{ 0, 0, 0, 1 });
+            gfx.draw_text("Toolbox", 16, 16);
         }
 
         try sdl.video.gl.swapWindow(window);

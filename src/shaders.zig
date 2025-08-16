@@ -1,12 +1,7 @@
 const std = @import("std");
 const log = std.log.scoped(.shaders);
 const gl = @import("gl");
-
-pub const tile_shader = struct {
-    pub var program: gl.uint = undefined;
-    pub var projection_loc: gl.int = undefined;
-    pub var view_loc: gl.int = undefined;
-};
+const la = @import("linear_algebra.zig");
 
 pub const debug_shader = struct {
     pub var program: gl.uint = undefined;
@@ -15,19 +10,44 @@ pub const debug_shader = struct {
     pub var model_loc: gl.int = undefined;
 };
 
+pub const gfx_shader = struct {
+    pub var program: gl.uint = undefined;
+    pub var projection_loc: gl.int = undefined;
+    pub var view_loc: gl.int = undefined;
+    pub var model_loc: gl.int = undefined;
+    pub var color_loc: gl.int = undefined;
+    pub var colormap_enabled_loc: gl.int = undefined;
+};
+
+pub const tile_shader = struct {
+    pub var program: gl.uint = undefined;
+    pub var projection_loc: gl.int = undefined;
+    pub var view_loc: gl.int = undefined;
+};
+
 pub fn load() void {
     {
-        tile_shader.program = load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/tile.frag"));
-        gl.UseProgram(tile_shader.program);
-        tile_shader.projection_loc = gl.GetUniformLocation(tile_shader.program, "u_projection");
-        tile_shader.view_loc = gl.GetUniformLocation(tile_shader.program, "u_view");
-    }
-    {
-        debug_shader.program = load_shader(@embedFile("shaders/debug.vert"), @embedFile("shaders/debug.frag"));
+        debug_shader.program = load_shader(@embedFile("shaders/position.vert"), @embedFile("shaders/debug.frag"));
         gl.UseProgram(debug_shader.program);
         debug_shader.projection_loc = gl.GetUniformLocation(debug_shader.program, "u_projection");
         debug_shader.view_loc = gl.GetUniformLocation(debug_shader.program, "u_view");
         debug_shader.model_loc = gl.GetUniformLocation(debug_shader.program, "u_model");
+    }
+    {
+        gfx_shader.program = load_shader(@embedFile("shaders/gfx.vert"), @embedFile("shaders/gfx.frag"));
+        gl.UseProgram(gfx_shader.program);
+        gfx_shader.projection_loc = gl.GetUniformLocation(gfx_shader.program, "u_projection");
+        gfx_shader.view_loc = gl.GetUniformLocation(gfx_shader.program, "u_view");
+        gfx_shader.model_loc = gl.GetUniformLocation(gfx_shader.program, "u_model");
+        gl.Uniform1i(gl.GetUniformLocation(gfx_shader.program, "u_colormap"), 0);
+        gfx_shader.color_loc = gl.GetUniformLocation(gfx_shader.program, "u_color");
+        gfx_shader.colormap_enabled_loc = gl.GetUniformLocation(gfx_shader.program, "u_colormap_enabled");
+    }
+    {
+        tile_shader.program = load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/textured.frag"));
+        gl.UseProgram(tile_shader.program);
+        tile_shader.projection_loc = gl.GetUniformLocation(tile_shader.program, "u_projection");
+        tile_shader.view_loc = gl.GetUniformLocation(tile_shader.program, "u_view");
     }
 }
 
