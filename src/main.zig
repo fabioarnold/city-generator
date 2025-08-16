@@ -18,6 +18,22 @@ const input = struct {
     var framedown: bool = false;
 };
 
+const Camera = struct {
+    position: vec3 = @splat(0),
+    phi: f32 = 0, // azimuth angle in degrees
+    theta: f32 = 0, // polar angle in degrees
+
+    fn view(self: *const Camera) mat4 {
+        const sin_theta = @sin(std.math.degreesToRadians(self.theta));
+        const cos_theta = @cos(std.math.degreesToRadians(self.theta));
+        const sin_phi = @sin(std.math.degreesToRadians(self.phi));
+        const cos_phi = @cos(std.math.degreesToRadians(self.phi));
+        const view_dir: vec3 = .{ cos_theta * sin_phi, cos_theta * cos_phi, sin_theta };
+        return la.look_at(self.position, self.position + view_dir, .{ 0, 0, 1 });
+    }
+};
+var camera: Camera = .{};
+
 const GLTile = struct {
     vbo: gl.uint,
     ebo: gl.uint,
@@ -175,7 +191,19 @@ pub fn main() !void {
     shaders.load();
     debug_draw.init();
 
+    camera.position = .{ 32 + 8, 32 - 8, 16 };
+    camera.phi = -45;
+    camera.theta = -55;
+
+    var ns_lastframe = sdl.timer.getNanosecondsSinceInit();
     mainloop: while (true) {
+        const dt: f32 = blk: {
+            const ns = sdl.timer.getNanosecondsSinceInit();
+            const ns_delta: f64 = @floatFromInt(ns - ns_lastframe);
+            ns_lastframe = ns;
+            break :blk @floatCast(ns_delta / 1_000_000_000);
+        };
+
         input.framedown = false;
         while (sdl.events.poll()) |event| {
             switch (event) {
@@ -192,13 +220,29 @@ pub fn main() !void {
             }
         }
 
+        const key_state = sdl.keyboard.getState();
+        const move_speed = 25;
+        const angular_speed = 90;
+        var move: vec4 = @splat(0);
+        if (key_state[@intFromEnum(sdl.Scancode.d)]) move[0] += move_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.a)]) move[0] -= move_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.w)]) move[1] += move_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.s)]) move[1] -= move_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.e)]) move[2] += move_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.q)]) move[2] -= move_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.right)]) camera.phi += angular_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.left)]) camera.phi -= angular_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.up)]) camera.theta += angular_speed * dt;
+        if (key_state[@intFromEnum(sdl.Scancode.down)]) camera.theta -= angular_speed * dt;
+        camera.position += la.vec3_from_vec4(la.mul_vector(la.rotation(-camera.phi, .{ 0, 0, 1 }), move));
+
         const window_size = try window.getSize();
         const pixel_size = try window.getSizeInPixels();
 
         // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
         const aspect_ratio = f32_i(window_size.width) / f32_i(window_size.height);
         const projection = la.perspective(45, aspect_ratio, 0.1);
-        const view = la.look_at(.{ 32 + 8, 32 - 8, 16 }, .{ 32, 32, 0 }, .{ 0, 0, 1 });
+        const view = camera.view();
 
         // screen to world
         const cursor_pos = blk: {
@@ -256,13 +300,16 @@ pub fn main() !void {
             gl.DrawElementsInstanced(gl.TRIANGLES, gl_tile.index_count, gl.UNSIGNED_SHORT, null, gl_tile.instance_count);
         }
 
-        // draw quad
+        // draw cursor highlight quad
         {
             gl.Disable(gl.DEPTH_TEST);
             defer gl.Enable(gl.DEPTH_TEST);
 
             debug_draw.begin(&projection, &view);
-            debug_draw.quad(&la.translation(@round(cursor_pos[0] - 0.5), @round(cursor_pos[1] - 0.5), 0));
+            const tile_x = @round(cursor_pos[0] - 0.5);
+            const tile_y = @round(cursor_pos[1] - 0.5);
+            const model = la.mul(la.translation(tile_x, tile_y, 0), la.scale(1, 1, 1));
+            debug_draw.quad(&model);
         }
 
         try sdl.video.gl.swapWindow(window);
