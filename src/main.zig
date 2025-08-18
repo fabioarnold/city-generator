@@ -283,6 +283,13 @@ pub fn main() !void {
         gl.ClearColor(0.2, 0.4, 0.6, 1);
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
+        var frame_arena_instance = std.heap.ArenaAllocator.init(gpa.allocator());
+        defer frame_arena_instance.deinit();
+
+        const frame_arena = frame_arena_instance.allocator();
+        const pixel_ratio = f32_i(pixel_size.width) / f32_i(window_size.width);
+        gfx.begin_frame(frame_arena, pixel_ratio);
+
         gl.UseProgram(shaders.tile_shader.program);
         gl.BindTexture(gl.TEXTURE_2D, texture);
         gl.UniformMatrix4fv(shaders.tile_shader.projection_loc, 1, gl.FALSE, @ptrCast(&projection));
@@ -318,11 +325,19 @@ pub fn main() !void {
             gfx.begin(&ortho, &la.identity());
             gfx.transform(&la.scale(2, 2, 1));
             gfx.set_color(.{ 0, 0, 0, 1 });
-            gfx.draw_rect(8 - 1, 8 - 1, 96 + 2, 344 + 2);
+            gfx.fill_rect(8 - 1, 8 - 1, 96 + 2, 344 + 2);
             gfx.set_color(.{ 0.95, 0.95, 0.95, 1 });
-            gfx.draw_rect(8, 8, 96, 344);
+            gfx.fill_rect(8, 8, 96, 344);
             gfx.set_color(.{ 0, 0, 0, 1 });
             gfx.draw_text("Toolbox", 16, 16);
+
+            var path = try gfx.Path.init(frame_arena, 20);
+            path.move_to(100, 100);
+            path.line_to(200, 100);
+            path.bezier_to(200, 150, 150, 200, 100, 200);
+            path.close();
+            gfx.set_color(.{ 1, 0, 0, 1 });
+            try gfx.fill_path(&path);
         }
 
         try sdl.video.gl.swapWindow(window);
