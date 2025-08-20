@@ -15,6 +15,23 @@ var device_pixel_ratio: f32 = undefined;
 var tesselation_tolerance: f32 = undefined;
 var distance_tolerance: f32 = undefined;
 
+var stroke_width: f32 = 1;
+var line_cap: LineCap = .butt;
+var line_join: LineJoin = .miter;
+var miter_limit: f32 = 10;
+
+pub const LineCap = enum(u2) {
+    butt,
+    round,
+    square,
+};
+
+pub const LineJoin = enum(u2) {
+    miter,
+    round,
+    bevel,
+};
+
 pub const Path = struct {
     commands: std.ArrayListUnmanaged(Command),
 
@@ -65,6 +82,14 @@ pub const Path = struct {
     pub fn close(path: *Path) void {
         path.commands.appendAssumeCapacity(.{ .verb = .close });
     }
+
+    pub fn rect(path: *Path, x: f32, y: f32, w: f32, h: f32) void {
+        path.move_to(x, y);
+        path.line_to(x, y + h);
+        path.line_to(x + w, y + h);
+        path.line_to(x + w, y);
+        path.close();
+    }
 };
 
 pub fn init(allocator: std.mem.Allocator) void {
@@ -83,6 +108,15 @@ pub fn init(allocator: std.mem.Allocator) void {
 
     gl.UseProgram(shaders.gfx_shader.program);
     gl.Uniform4f(shaders.gfx_shader.color_loc, 1, 1, 1, 1);
+
+    reset();
+}
+
+pub fn reset() void {
+    stroke_width = 1;
+    line_cap = .butt;
+    line_join = .miter;
+    miter_limit = 10;
 }
 
 pub fn begin_frame(arena: std.mem.Allocator, pixel_ratio: f32) void {
@@ -109,6 +143,10 @@ pub fn set_color(color: vec4) void {
     gl.Uniform4fv(shaders.gfx_shader.color_loc, 1, @ptrCast(&color));
 }
 
+pub fn set_stroke_width(width: f32) void {
+    stroke_width = width;
+}
+
 pub fn fill_path(path: *const Path) !void {
     var cache = PathCache.init();
     try cache.flatten_paths(path);
@@ -117,7 +155,7 @@ pub fn fill_path(path: *const Path) !void {
         vertex_data.clearRetainingCapacity();
         try vertex_data.ensureTotalCapacity(2 * sub_path.points.items.len);
         for (sub_path.points.items) |point| {
-            vertex_data.appendSliceAssumeCapacity(&.{ point.x, point.y });
+            add_vertex(point.x, point.y);
         }
 
         gl.EnableVertexAttribArray(0);
@@ -136,8 +174,29 @@ pub fn fill_path(path: *const Path) !void {
     }
 }
 
-pub fn stroke_path(path: *const Path) void {
-    _ = path;
+pub fn stroke_path(path: *const Path) !void {
+    var cache = PathCache.init();
+
+    try cache.flatten_paths(path);
+
+    try cache.expand_stroke(0.5 * stroke_width);
+
+    gl.EnableVertexAttribArray(0);
+    gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.BufferData(
+        gl.ARRAY_BUFFER,
+        @intCast(vertex_data.items.len * @sizeOf(f32)),
+        vertex_data.items.ptr,
+        gl.STREAM_DRAW,
+    );
+    gl.VertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 2 * @sizeOf(f32), 0);
+
+    gl.UseProgram(shaders.gfx_shader.program);
+    gl.Uniform1i(shaders.gfx_shader.colormap_enabled_loc, 0);
+
+    for (cache.paths.items) |sub_path| {
+        gl.DrawArrays(gl.TRIANGLE_STRIP, @intCast(sub_path.vertex_offset), @intCast(sub_path.vertex_count));
+    }
 }
 
 pub fn fill_rect(x: f32, y: f32, w: f32, h: f32) void {
@@ -212,10 +271,18 @@ pub fn draw_text(text: []const u8, x: f32, y: f32) void {
 const Point = struct {
     x: f32,
     y: f32,
+    dx: f32,
+    dy: f32,
+    len: f32,
+    dmx: f32,
+    dmy: f32,
     flags: Flags,
 
     const Flags = struct {
         corner: bool = false,
+        left: bool = false,
+        bevel: bool = false,
+        innerbevel: bool = false,
     };
 
     fn eql(self: Point, other: Point) bool {
@@ -231,11 +298,19 @@ const PathCache = struct {
     const FlattenedPath = struct {
         points: std.ArrayListUnmanaged(Point),
         closed: bool,
+        convex: bool,
+        nbevel: usize,
+        vertex_offset: usize,
+        vertex_count: usize,
 
         fn init() FlattenedPath {
             return .{
                 .points = .initBuffer(&.{}),
                 .closed = false,
+                .convex = false,
+                .nbevel = 0,
+                .vertex_offset = 0,
+                .vertex_count = 0,
             };
         }
 
@@ -253,8 +328,13 @@ const PathCache = struct {
         path.* = FlattenedPath.init();
     }
 
-    fn add_point(cache: *PathCache, point: Point) !void {
+    fn add_point(cache: *PathCache, x: f32, y: f32, flags: Point.Flags) !void {
         const path = &cache.paths.items[cache.paths.items.len - 1];
+
+        var point = std.mem.zeroes(Point);
+        point.x = x;
+        point.y = y;
+        point.flags = flags;
 
         if (path.points.items.len > 0) {
             const last = &path.points.items[path.points.items.len - 1];
@@ -281,19 +361,19 @@ const PathCache = struct {
             switch (source_path.commands.items[i].verb) {
                 .move => {
                     try cache.add_path();
-                    try cache.add_point(.{
-                        .x = source_path.commands.items[i + 1].data,
-                        .y = source_path.commands.items[i + 2].data,
-                        .flags = .{ .corner = true },
-                    });
+                    try cache.add_point(
+                        source_path.commands.items[i + 1].data,
+                        source_path.commands.items[i + 2].data,
+                        .{ .corner = true },
+                    );
                     i += 3;
                 },
                 .line => {
-                    try cache.add_point(.{
-                        .x = source_path.commands.items[i + 1].data,
-                        .y = source_path.commands.items[i + 2].data,
-                        .flags = .{ .corner = true },
-                    });
+                    try cache.add_point(
+                        source_path.commands.items[i + 1].data,
+                        source_path.commands.items[i + 2].data,
+                        .{ .corner = true },
+                    );
                     i += 3;
                 },
                 .bezier => {
@@ -318,8 +398,6 @@ const PathCache = struct {
                 },
             }
         }
-
-        // Calculate the direction and length of line segments.
     }
 
     fn tesselate_bezier(
@@ -353,7 +431,7 @@ const PathCache = struct {
         const d3 = @abs(((x3 - x4) * dy - (y3 - y4) * dx));
 
         if ((d2 + d3) * (d2 + d3) < tesselation_tolerance * (dx * dx + dy * dy)) {
-            try cache.add_point(.{ .x = x4, .y = y4, .flags = flags });
+            try cache.add_point(x4, y4, flags);
             return;
         }
 
@@ -365,4 +443,289 @@ const PathCache = struct {
         try cache.tesselate_bezier(x1, y1, x12, y12, x123, y123, x1234, y1234, level + 1, .{});
         try cache.tesselate_bezier(x1234, y1234, x234, y234, x34, y34, x4, y4, level + 1, flags);
     }
+
+    fn expand_stroke(cache: *PathCache, width: f32) !void {
+        const w = width;
+        const ncap = curve_divisions(w, std.math.pi); // Calculate divisions per half circle.
+
+        // Calculate the direction and length of line segments.
+        for (cache.paths.items) |*path| {
+            // If the first and last points are the same, remove the last, mark as closed path.
+            if (path.points.items[0].eql(path.points.getLast())) {
+                path.points.items.len -= 1;
+                if (path.points.items.len == 0) continue;
+                path.closed = true;
+            }
+
+            // // Enforce winding.
+            // if (path.points.items.len > 2) {
+            //     if (path.winding == .cw) polyReverse(pts);
+            // }
+
+            var p0 = &path.points.items[path.points.items.len - 1];
+            for (path.points.items) |*p1| {
+                defer p0 = p1;
+                // Calculate segment direction and length
+                p0.dx = p1.x - p0.x;
+                p0.dy = p1.y - p0.y;
+                p0.len = normalize(&p0.dx, &p0.dy);
+            }
+        }
+
+        try cache.calculate_joins();
+
+        // Calculate max vertex usage.
+        var cverts: usize = 0;
+        for (cache.paths.items) |path| {
+            if (line_join == .round) {
+                cverts += (path.points.items.len + path.nbevel * (ncap + 2) + 1) * 2; // plus one for loop
+            } else {
+                cverts += (path.points.items.len + path.nbevel * 5 + 1) * 2; // plus one for loop
+            }
+            if (!path.closed) {
+                // space for caps
+                if (line_cap == .round) {
+                    cverts += (ncap * 2 + 2) * 2;
+                } else {
+                    cverts += (3 + 3) * 2;
+                }
+            }
+        }
+
+        // Calculate vertex data.
+        try vertex_data.ensureUnusedCapacity(2 * cverts);
+
+        for (cache.paths.items) |*path| {
+            if (path.points.items.len == 0) continue;
+            path.vertex_offset = vertex_data.items.len / 2;
+            const pts = path.points.items;
+
+            var p0 = &pts[path.points.items.len - 1];
+            var p1 = &pts[0];
+            var s: u32 = 0;
+            var e = path.points.items.len;
+            if (!path.closed) {
+                p0 = &pts[0];
+                p1 = &pts[1];
+                s = 1;
+                e = path.points.items.len - 1;
+
+                // Add cap.
+                var dx = p1.x - p0.x;
+                var dy = p1.y - p0.y;
+                _ = normalize(&dx, &dy);
+                // switch (line_cap) {
+                //     .butt => buttCapStart(&dst, p0.*, dx, dy, w, 0, @"u0", @"u1"),
+                //     .square => buttCapStart(&dst, p0.*, dx, dy, w, w, @"u0", @"u1"),
+                //     .round => roundCapStart(&dst, p0.*, dx, dy, w, ncap, @"u0", @"u1"),
+                // }
+            }
+
+            var j: u32 = s;
+            while (j < e) : (j += 1) {
+                p1 = &pts[j];
+                defer p0 = p1;
+                if (p1.flags.bevel or p1.flags.innerbevel) {
+                    if (line_join == .round) {
+                        // round_join(&dst, p0.*, p1.*, w, w, ncap);
+                    } else {
+                        bevel_join(p0.*, p1.*, w, w);
+                    }
+                } else {
+                    add_vertex(p1.x + (p1.dmx * w), p1.y + (p1.dmy * w));
+                    add_vertex(p1.x - (p1.dmx * w), p1.y - (p1.dmy * w));
+                }
+            }
+
+            if (path.closed) {
+                // Copy first two vertices to loop the stroke.
+                const vertex_start = vertex_data.items[2 * path.vertex_offset ..];
+                add_vertex(vertex_start[0], vertex_start[1]);
+                add_vertex(vertex_start[2], vertex_start[3]);
+            } else {
+                p1 = &pts[j];
+                // Add cap.
+                var dx = p1.x - p0.x;
+                var dy = p1.y - p0.y;
+                _ = normalize(&dx, &dy);
+
+                // switch (line_cap) {
+                //     .butt => buttCapEnd(&dst, p1.*, dx, dy, w, 0, @"u0", @"u1"),
+                //     .square => buttCapEnd(&dst, p1.*, dx, dy, w, w, @"u0", @"u1"),
+                //     .round => roundCapEnd(&dst, p1.*, dx, dy, w, ncap, @"u0", @"u1"),
+                // }
+            }
+
+            path.vertex_count = vertex_data.items.len / 2 - path.vertex_offset;
+        }
+    }
+
+    fn bevel_join(p0: Point, p1: Point, lw: f32, rw: f32) void {
+        const dlx0 = p0.dy;
+        const dly0 = -p0.dx;
+        const dlx1 = p1.dy;
+        const dly1 = -p1.dx;
+
+        if (p1.flags.left) {
+            var lx0: f32 = undefined;
+            var ly0: f32 = undefined;
+            var lx1: f32 = undefined;
+            var ly1: f32 = undefined;
+            choose_bevel(p1.flags.innerbevel, p0, p1, lw, &lx0, &ly0, &lx1, &ly1);
+
+            add_vertex(lx0, ly0);
+            add_vertex(p1.x - dlx0 * rw, p1.y - dly0 * rw);
+
+            if (p1.flags.bevel) {
+                add_vertex(lx0, ly0);
+                add_vertex(p1.x - dlx0 * rw, p1.y - dly0 * rw);
+
+                add_vertex(lx1, ly1);
+                add_vertex(p1.x - dlx1 * rw, p1.y - dly1 * rw);
+            } else {
+                const rx0 = p1.x - p1.dmx * rw;
+                const ry0 = p1.y - p1.dmy * rw;
+
+                add_vertex(p1.x, p1.y);
+                add_vertex(p1.x - dlx0 * rw, p1.y - dly0 * rw);
+
+                add_vertex(rx0, ry0);
+                add_vertex(rx0, ry0);
+
+                add_vertex(p1.x, p1.y);
+                add_vertex(p1.x - dlx1 * rw, p1.y - dly1 * rw);
+            }
+
+            add_vertex(lx1, ly1);
+            add_vertex(p1.x - dlx1 * rw, p1.y - dly1 * rw);
+        } else {
+            var rx0: f32 = undefined;
+            var ry0: f32 = undefined;
+            var rx1: f32 = undefined;
+            var ry1: f32 = undefined;
+            choose_bevel(p1.flags.innerbevel, p0, p1, -rw, &rx0, &ry0, &rx1, &ry1);
+
+            add_vertex(p1.x + dlx0 * lw, p1.y + dly0 * lw);
+            add_vertex(rx0, ry0);
+
+            if (p1.flags.bevel) {
+                add_vertex(p1.x + dlx0 * lw, p1.y + dly0 * lw);
+                add_vertex(rx0, ry0);
+
+                add_vertex(p1.x + dlx1 * lw, p1.y + dly1 * lw);
+                add_vertex(rx1, ry1);
+            } else {
+                const lx0 = p1.x + p1.dmx * lw;
+                const ly0 = p1.y + p1.dmy * lw;
+
+                add_vertex(p1.x + dlx0 * lw, p1.y + dly0 * lw);
+                add_vertex(p1.x, p1.y);
+
+                add_vertex(lx0, ly0);
+                add_vertex(lx0, ly0);
+
+                add_vertex(p1.x + dlx1 * lw, p1.y + dly1 * lw);
+                add_vertex(p1.x, p1.y);
+            }
+
+            add_vertex(p1.x + dlx1 * lw, p1.y + dly1 * lw);
+            add_vertex(rx1, ry1);
+        }
+    }
+
+    fn calculate_joins(cache: *PathCache) !void {
+        // Calculate which joins needs extra vertices to append, and gather vertex count.
+        for (cache.paths.items) |*path| {
+            if (path.points.items.len == 0) continue;
+            const pts = path.points.items;
+            var nleft: u32 = 0;
+            path.nbevel = 0;
+
+            var p0 = &pts[pts.len - 1];
+            for (pts) |*p1| {
+                defer p0 = p1;
+
+                const dlx0 = p0.dy;
+                const dly0 = -p0.dx;
+                const dlx1 = p1.dy;
+                const dly1 = -p1.dx;
+                // Calculate extrusions
+                p1.dmx = (dlx0 + dlx1) * 0.5;
+                p1.dmy = (dly0 + dly1) * 0.5;
+                const dmr2 = p1.dmx * p1.dmx + p1.dmy * p1.dmy;
+                if (dmr2 > 0.000001) {
+                    var s = 1.0 / dmr2;
+                    if (s > 600) s = 600;
+                    p1.dmx *= s;
+                    p1.dmy *= s;
+                }
+
+                // Clear flags, but keep the corner.
+                p1.flags = .{ .corner = p1.flags.corner };
+
+                // Keep track of left turns.
+                if (cross(p0.dx, p0.dy, p1.dx, p1.dy) > 0.0) {
+                    nleft += 1;
+                    p1.flags.left = true;
+                }
+
+                // Calculate if we should use bevel or miter for inner join.
+                const limit = 1.01;
+                if ((dmr2 * limit * limit) < 1.0)
+                    p1.flags.innerbevel = true;
+
+                // Check to see if the corner needs to be beveled.
+                if (p1.flags.corner) {
+                    if ((dmr2 * miter_limit * miter_limit) < 1.0 or
+                        line_join == .bevel or line_join == .round)
+                    {
+                        p1.flags.bevel = true;
+                    }
+                }
+
+                if (p1.flags.bevel or p1.flags.innerbevel) {
+                    path.nbevel += 1;
+                }
+            }
+
+            path.convex = (nleft == path.points.items.len);
+        }
+    }
 };
+
+fn add_vertex(x: f32, y: f32) void {
+    vertex_data.appendSliceAssumeCapacity(&.{ x, y });
+}
+
+fn curve_divisions(r: f32, arc: f32) u32 {
+    const da = std.math.acos(r / (r + tesselation_tolerance)) * 2;
+    return @max(2, @as(u32, @intFromFloat(@ceil(arc / da))));
+}
+
+fn choose_bevel(bevel: bool, p0: Point, p1: Point, w: f32, x0: *f32, y0: *f32, x1: *f32, y1: *f32) void {
+    if (bevel) {
+        x0.* = p1.x + p0.dy * w;
+        y0.* = p1.y - p0.dx * w;
+        x1.* = p1.x + p1.dy * w;
+        y1.* = p1.y - p1.dx * w;
+    } else {
+        x0.* = p1.x + p1.dmx * w;
+        y0.* = p1.y + p1.dmy * w;
+        x1.* = p1.x + p1.dmx * w;
+        y1.* = p1.y + p1.dmy * w;
+    }
+}
+
+fn cross(dx0: f32, dy0: f32, dx1: f32, dy1: f32) f32 {
+    return dx1 * dy0 - dx0 * dy1;
+}
+
+fn normalize(x: *f32, y: *f32) f32 {
+    const d = @sqrt(x.* * x.* + y.* * y.*);
+    if (d > 1e-6) {
+        const id = 1.0 / d;
+        x.* *= id;
+        y.* *= id;
+    }
+    return d;
+}

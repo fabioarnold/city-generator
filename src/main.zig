@@ -323,13 +323,14 @@ pub fn main() !void {
 
             const ortho = la.ortho(0, f32_i(window_size.width), f32_i(window_size.height), 0, -1, 1);
             gfx.begin(&ortho, &la.identity());
-            gfx.transform(&la.scale(2, 2, 1));
             gfx.set_color(.{ 0, 0, 0, 1 });
             gfx.fill_rect(8 - 1, 8 - 1, 96 + 2, 344 + 2);
             gfx.set_color(.{ 0.95, 0.95, 0.95, 1 });
             gfx.fill_rect(8, 8, 96, 344);
             gfx.set_color(.{ 0, 0, 0, 1 });
+            gfx.transform(&la.scale(2, 2, 1));
             gfx.draw_text("Toolbox", 16, 16);
+            gfx.transform(&la.identity());
 
             var path = try gfx.Path.init(frame_arena, 20);
             path.move_to(100, 100);
@@ -338,6 +339,10 @@ pub fn main() !void {
             path.close();
             gfx.set_color(.{ 1, 0, 0, 1 });
             try gfx.fill_path(&path);
+
+            gfx.set_color(.{ 0, 0, 0, 1 });
+            gfx.set_stroke_width(4);
+            try gfx.stroke_path(&path);
         }
 
         try sdl.video.gl.swapWindow(window);
