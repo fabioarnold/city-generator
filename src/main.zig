@@ -105,6 +105,11 @@ pub fn main() !void {
     gl.Enable(gl.BLEND);
     gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
+    // Culling
+    // gl.Enable(gl.CULL_FACE);
+    // gl.CullFace(gl.BACK);
+    // gl.FrontFace(gl.CCW);
+
     // VAO is required for OpenGL core profile.
     var vao_dummy: gl.uint = undefined;
     gl.GenVertexArrays(1, @ptrCast(&vao_dummy));
@@ -322,15 +327,20 @@ pub fn main() !void {
             debug_draw.quad(&model);
 
             const ortho = la.ortho(0, f32_i(window_size.width), f32_i(window_size.height), 0, -1, 1);
+            // const ortho = la.ortho(0, f32_i(window_size.width), 0, f32_i(window_size.height), -1, 1);
             gfx.begin(&ortho, &la.identity());
-            gfx.set_color(.{ 0, 0, 0, 1 });
-            gfx.fill_rect(8 - 1, 8 - 1, 96 + 2, 344 + 2);
-            gfx.set_color(.{ 0.95, 0.95, 0.95, 1 });
-            gfx.fill_rect(8, 8, 96, 344);
             gfx.set_color(.{ 0, 0, 0, 1 });
             gfx.transform(&la.scale(2, 2, 1));
             gfx.draw_text("Toolbox", 16, 16);
             gfx.transform(&la.identity());
+
+            var box_path = try gfx.Path.init(frame_arena, 100);
+            box_path.rect_rounded(16, 16, 160, 688, 8);
+            gfx.set_color(.{ 0.95, 0.95, 0.95, 1 });
+            try gfx.fill_path(&box_path);
+            gfx.set_color(.{ 0, 0, 0, 1 });
+            gfx.set_stroke_width(2);
+            try gfx.stroke_path(&box_path);
 
             var path = try gfx.Path.init(frame_arena, 20);
             path.move_to(100, 100);

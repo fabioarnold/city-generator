@@ -20,6 +20,9 @@ var line_cap: LineCap = .butt;
 var line_join: LineJoin = .miter;
 var miter_limit: f32 = 10;
 
+// Length proportional to radius of a cubic bezier handle for 90deg arcs.
+const kappa90 = 4.0 * (@sqrt(2.0) - 1.0) / 3.0; // 0.5522847493
+
 pub const LineCap = enum(u2) {
     butt,
     round,
@@ -88,6 +91,41 @@ pub const Path = struct {
         path.line_to(x, y + h);
         path.line_to(x + w, y + h);
         path.line_to(x + w, y);
+        path.close();
+    }
+
+    pub fn rect_rounded(path: *Path, x: f32, y: f32, w: f32, h: f32, r: f32) void {
+        path.rect_rounded_varying(x, y, w, h, r, r, r, r);
+    }
+
+    pub fn rect_rounded_varying(
+        path: *Path,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        r_topleft: f32,
+        r_topright: f32,
+        r_bottomleft: f32,
+        r_bottomright: f32,
+    ) void {
+        const rx_bl = @min(r_bottomleft, 0.5 * @abs(w)) * std.math.sign(w);
+        const ry_bl = @min(r_bottomleft, 0.5 * @abs(h)) * std.math.sign(h);
+        const rx_br = @min(r_bottomright, 0.5 * @abs(w)) * std.math.sign(w);
+        const ry_br = @min(r_bottomright, 0.5 * @abs(h)) * std.math.sign(h);
+        const rx_tr = @min(r_topright, 0.5 * @abs(w)) * std.math.sign(w);
+        const ry_tr = @min(r_topright, 0.5 * @abs(h)) * std.math.sign(h);
+        const rx_tl = @min(r_topleft, 0.5 * @abs(w)) * std.math.sign(w);
+        const ry_tl = @min(r_topleft, 0.5 * @abs(h)) * std.math.sign(h);
+        path.move_to(x, y + ry_tl);
+        path.line_to(x, y + h - ry_bl);
+        path.bezier_to(x, y + h - ry_bl * (1 - kappa90), x + rx_bl * (1 - kappa90), y + h, x + rx_bl, y + h);
+        path.line_to(x + w - rx_br, y + h);
+        path.bezier_to(x + w - rx_br * (1 - kappa90), y + h, x + w, y + h - ry_br * (1 - kappa90), x + w, y + h - ry_br);
+        path.line_to(x + w, y + ry_tr);
+        path.bezier_to(x + w, y + ry_tr * (1 - kappa90), x + w - rx_tr * (1 - kappa90), y, x + w - rx_tr, y);
+        path.line_to(x + rx_tl, y);
+        path.bezier_to(x + rx_tl * (1 - kappa90), y, x, y + ry_tl * (1 - kappa90), x, y + ry_tl);
         path.close();
     }
 };
@@ -288,7 +326,7 @@ const Point = struct {
     fn eql(self: Point, other: Point) bool {
         const dx = other.x - self.x;
         const dy = other.y - self.y;
-        return dx * dx + dy + dy < distance_tolerance * distance_tolerance;
+        return dx * dx + dy * dy < distance_tolerance * distance_tolerance;
     }
 };
 
@@ -496,29 +534,29 @@ const PathCache = struct {
         try vertex_data.ensureUnusedCapacity(2 * cverts);
 
         for (cache.paths.items) |*path| {
-            if (path.points.items.len == 0) continue;
-            path.vertex_offset = vertex_data.items.len / 2;
             const pts = path.points.items;
+            if (pts.len == 0) continue;
+            path.vertex_offset = vertex_data.items.len / 2;
 
-            var p0 = &pts[path.points.items.len - 1];
+            var p0 = &pts[pts.len - 1];
             var p1 = &pts[0];
             var s: u32 = 0;
-            var e = path.points.items.len;
+            var e = pts.len;
             if (!path.closed) {
                 p0 = &pts[0];
                 p1 = &pts[1];
                 s = 1;
-                e = path.points.items.len - 1;
+                e = pts.len - 1;
 
                 // Add cap.
                 var dx = p1.x - p0.x;
                 var dy = p1.y - p0.y;
                 _ = normalize(&dx, &dy);
-                // switch (line_cap) {
-                //     .butt => buttCapStart(&dst, p0.*, dx, dy, w, 0, @"u0", @"u1"),
-                //     .square => buttCapStart(&dst, p0.*, dx, dy, w, w, @"u0", @"u1"),
-                //     .round => roundCapStart(&dst, p0.*, dx, dy, w, ncap, @"u0", @"u1"),
-                // }
+                switch (line_cap) {
+                    .butt => butt_cap_start(p0.*, dx, dy, w, 0),
+                    .square => butt_cap_start(p0.*, dx, dy, w, w),
+                    .round => round_cap_start(p0.*, dx, dy, w, ncap),
+                }
             }
 
             var j: u32 = s;
@@ -528,6 +566,7 @@ const PathCache = struct {
                 if (p1.flags.bevel or p1.flags.innerbevel) {
                     if (line_join == .round) {
                         // round_join(&dst, p0.*, p1.*, w, w, ncap);
+                        unreachable;
                     } else {
                         bevel_join(p0.*, p1.*, w, w);
                     }
@@ -549,11 +588,11 @@ const PathCache = struct {
                 var dy = p1.y - p0.y;
                 _ = normalize(&dx, &dy);
 
-                // switch (line_cap) {
-                //     .butt => buttCapEnd(&dst, p1.*, dx, dy, w, 0, @"u0", @"u1"),
-                //     .square => buttCapEnd(&dst, p1.*, dx, dy, w, w, @"u0", @"u1"),
-                //     .round => roundCapEnd(&dst, p1.*, dx, dy, w, ncap, @"u0", @"u1"),
-                // }
+                switch (line_cap) {
+                    .butt => butt_cap_end(p1.*, dx, dy, w, 0),
+                    .square => butt_cap_end(p1.*, dx, dy, w, w),
+                    .round => round_cap_end(p1.*, dx, dy, w, ncap),
+                }
             }
 
             path.vertex_count = vertex_data.items.len / 2 - path.vertex_offset;
@@ -630,6 +669,62 @@ const PathCache = struct {
 
             add_vertex(p1.x + dlx1 * lw, p1.y + dly1 * lw);
             add_vertex(rx1, ry1);
+        }
+    }
+
+    fn butt_cap_start(p: Point, dx: f32, dy: f32, w: f32, d: f32) void {
+        const px = p.x - dx * d;
+        const py = p.y - dy * d;
+        const dlx = dy;
+        const dly = -dx;
+        add_vertex(px + dlx * w, py + dly * w);
+        add_vertex(px - dlx * w, py - dly * w);
+        add_vertex(px + dlx * w, py + dly * w);
+        add_vertex(px - dlx * w, py - dly * w);
+    }
+
+    fn butt_cap_end(p: Point, dx: f32, dy: f32, w: f32, d: f32) void {
+        const px = p.x + dx * d;
+        const py = p.y + dy * d;
+        const dlx = dy;
+        const dly = -dx;
+        add_vertex(px + dlx * w, py + dly * w);
+        add_vertex(px - dlx * w, py - dly * w);
+        add_vertex(px + dlx * w, py + dly * w);
+        add_vertex(px - dlx * w, py - dly * w);
+    }
+
+    fn round_cap_start(p: Point, dx: f32, dy: f32, w: f32, ncap: u32) void {
+        const px = p.x;
+        const py = p.y;
+        const dlx = dy;
+        const dly = -dx;
+        var i: u32 = 0;
+        while (i < ncap) : (i += 1) {
+            const a = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(ncap - 1)) * std.math.pi;
+            const ax = @cos(a) * w;
+            const ay = @sin(a) * w;
+            add_vertex(px - dlx * ax - dx * ay, py - dly * ax - dy * ay);
+            add_vertex(px, py);
+        }
+        add_vertex(px + dlx * w, py + dly * w);
+        add_vertex(px - dlx * w, py - dly * w);
+    }
+
+    fn round_cap_end(p: Point, dx: f32, dy: f32, w: f32, ncap: u32) void {
+        const px = p.x;
+        const py = p.y;
+        const dlx = dy;
+        const dly = -dx;
+        add_vertex(px + dlx * w, py + dly * w);
+        add_vertex(px - dlx * w, py - dly * w);
+        var i: u32 = 0;
+        while (i < ncap) : (i += 1) {
+            const a = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(ncap - 1)) * std.math.pi;
+            const ax = @cos(a) * w;
+            const ay = @sin(a) * w;
+            add_vertex(px, py);
+            add_vertex(px - dlx * ax + dx * ay, py - dly * ax + dy * ay);
         }
     }
 
