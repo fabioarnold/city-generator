@@ -83,6 +83,8 @@ pub fn main() !void {
 
     try sdl.video.gl.setAttribute(.context_minor_version, 1);
     try sdl.video.gl.setAttribute(.context_profile_mask, @intFromEnum(sdl.video.gl.Profile.core));
+    try sdl.video.gl.setAttribute(.depth_size, 24);
+    try sdl.video.gl.setAttribute(.stencil_size, 8);
     try sdl.video.gl.setAttribute(.multi_sample_buffers, 1);
     try sdl.video.gl.setAttribute(.multi_sample_samples, 4);
     const context = try sdl.video.gl.Context.init(window);
@@ -204,6 +206,10 @@ pub fn main() !void {
     camera.phi = -45;
     camera.theta = -55;
 
+    var frame_arena_instance = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer frame_arena_instance.deinit();
+    const frame_arena = frame_arena_instance.allocator();
+
     var ns_lastframe = sdl.timer.getNanosecondsSinceInit();
     mainloop: while (true) {
         const dt: f32 = blk: {
@@ -288,12 +294,9 @@ pub fn main() !void {
 
         gl.Viewport(0, 0, @intCast(pixel_size.width), @intCast(pixel_size.height));
         gl.ClearColor(0.2, 0.4, 0.6, 1);
-        gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
-        var frame_arena_instance = std.heap.ArenaAllocator.init(gpa.allocator());
-        defer frame_arena_instance.deinit();
-
-        const frame_arena = frame_arena_instance.allocator();
+        _ = frame_arena_instance.reset(.retain_capacity);
         const pixel_ratio = f32_i(pixel_size.width) / f32_i(window_size.width);
         gfx.begin_frame(frame_arena, pixel_ratio);
 
@@ -344,10 +347,12 @@ pub fn main() !void {
             gfx.set_stroke_width(2);
             try gfx.stroke_path(&box_path);
 
-            var path = try gfx.Path.init(frame_arena, 20);
+            var path = try gfx.Path.init(frame_arena, 100);
             path.move_to(100, 100);
             path.line_to(200, 100);
-            path.bezier_to(200, 150, 150, 200, 100, 200);
+            path.bezier_to(150, 100, 150, 200, 200, 200);
+            path.line_to(100, 200);
+            path.bezier_to(150, 200, 150, 100, 100, 100);
             path.close();
             gfx.set_color(.{ 1, 0, 0, 1 });
             try gfx.fill_path(&path);

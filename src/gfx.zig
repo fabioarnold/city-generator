@@ -189,6 +189,11 @@ pub fn fill_path(path: *const Path) !void {
     var cache = PathCache.init();
     try cache.flatten_paths(path);
 
+    try cache.calculate_joins();
+
+    gl.UseProgram(shaders.gfx_shader.program);
+    gl.Uniform1i(shaders.gfx_shader.colormap_enabled_loc, 0);
+
     for (cache.paths.items) |sub_path| {
         vertex_data.clearRetainingCapacity();
         try vertex_data.ensureTotalCapacity(2 * sub_path.points.items.len);
@@ -206,9 +211,23 @@ pub fn fill_path(path: *const Path) !void {
         );
         gl.VertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 2 * @sizeOf(f32), 0);
 
-        gl.UseProgram(shaders.gfx_shader.program);
-        gl.Uniform1i(shaders.gfx_shader.colormap_enabled_loc, 0);
-        gl.DrawArrays(gl.TRIANGLE_FAN, 0, @intCast(sub_path.points.items.len));
+        if (sub_path.convex) {
+            gl.DrawArrays(gl.TRIANGLE_FAN, 0, @intCast(sub_path.points.items.len));
+        } else {
+            gl.Enable(gl.STENCIL_TEST);
+            defer gl.Disable(gl.STENCIL_TEST);
+            gl.ColorMask(gl.FALSE, gl.FALSE, gl.FALSE, gl.FALSE);
+            gl.StencilMask(0xFF);
+            gl.StencilFunc(gl.ALWAYS, 0x00, 0xFF);
+            gl.StencilOpSeparate(gl.FRONT, gl.KEEP, gl.KEEP, gl.INCR_WRAP);
+            gl.StencilOpSeparate(gl.BACK, gl.KEEP, gl.KEEP, gl.DECR_WRAP);
+            gl.DrawArrays(gl.TRIANGLE_FAN, 0, @intCast(sub_path.points.items.len));
+            // Draw fill
+            gl.ColorMask(gl.TRUE, gl.TRUE, gl.TRUE, gl.TRUE);
+            gl.StencilFunc(gl.NOTEQUAL, 0x00, 0x7F);
+            gl.StencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
+            gl.DrawArrays(gl.TRIANGLE_FAN, 0, @intCast(sub_path.points.items.len));
+        }
     }
 }
 
@@ -486,30 +505,6 @@ const PathCache = struct {
         const w = width;
         const ncap = curve_divisions(w, std.math.pi); // Calculate divisions per half circle.
 
-        // Calculate the direction and length of line segments.
-        for (cache.paths.items) |*path| {
-            // If the first and last points are the same, remove the last, mark as closed path.
-            if (path.points.items[0].eql(path.points.getLast())) {
-                path.points.items.len -= 1;
-                if (path.points.items.len == 0) continue;
-                path.closed = true;
-            }
-
-            // // Enforce winding.
-            // if (path.points.items.len > 2) {
-            //     if (path.winding == .cw) polyReverse(pts);
-            // }
-
-            var p0 = &path.points.items[path.points.items.len - 1];
-            for (path.points.items) |*p1| {
-                defer p0 = p1;
-                // Calculate segment direction and length
-                p0.dx = p1.x - p0.x;
-                p0.dy = p1.y - p0.y;
-                p0.len = normalize(&p0.dx, &p0.dy);
-            }
-        }
-
         try cache.calculate_joins();
 
         // Calculate max vertex usage.
@@ -729,6 +724,30 @@ const PathCache = struct {
     }
 
     fn calculate_joins(cache: *PathCache) !void {
+        // Calculate the direction and length of line segments.
+        for (cache.paths.items) |*path| {
+            // If the first and last points are the same, remove the last, mark as closed path.
+            if (path.points.items[0].eql(path.points.getLast())) {
+                path.points.items.len -= 1;
+                if (path.points.items.len == 0) continue;
+                path.closed = true;
+            }
+
+            // // Enforce winding.
+            // if (path.points.items.len > 2) {
+            //     if (path.winding == .cw) polyReverse(pts);
+            // }
+
+            var p0 = &path.points.items[path.points.items.len - 1];
+            for (path.points.items) |*p1| {
+                defer p0 = p1;
+                // Calculate segment direction and length
+                p0.dx = p1.x - p0.x;
+                p0.dy = p1.y - p0.y;
+                p0.len = normalize(&p0.dx, &p0.dy);
+            }
+        }
+
         // Calculate which joins needs extra vertices to append, and gather vertex count.
         for (cache.paths.items) |*path| {
             if (path.points.items.len == 0) continue;
