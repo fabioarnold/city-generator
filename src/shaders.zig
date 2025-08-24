@@ -44,7 +44,7 @@ pub fn load() void {
         gfx_shader.colormap_enabled_loc = gl.GetUniformLocation(gfx_shader.program, "u_colormap_enabled");
     }
     {
-        tile_shader.program = load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/textured.frag"));
+        tile_shader.program = load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/tile.frag"));
         gl.UseProgram(tile_shader.program);
         tile_shader.projection_loc = gl.GetUniformLocation(tile_shader.program, "u_projection");
         tile_shader.view_loc = gl.GetUniformLocation(tile_shader.program, "u_view");

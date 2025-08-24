@@ -13,6 +13,8 @@ const vec4 = la.vec4;
 const mat4 = la.mat4;
 const mul = la.mul;
 
+const enable_multisampling = false;
+
 const input = struct {
     var mx: f32 = 0;
     var my: f32 = 0;
@@ -85,8 +87,10 @@ pub fn main() !void {
     try sdl.video.gl.setAttribute(.context_profile_mask, @intFromEnum(sdl.video.gl.Profile.core));
     try sdl.video.gl.setAttribute(.depth_size, 24);
     try sdl.video.gl.setAttribute(.stencil_size, 8);
-    try sdl.video.gl.setAttribute(.multi_sample_buffers, 1);
-    try sdl.video.gl.setAttribute(.multi_sample_samples, 4);
+    if (enable_multisampling) {
+        try sdl.video.gl.setAttribute(.multi_sample_buffers, 1);
+        try sdl.video.gl.setAttribute(.multi_sample_samples, 4);
+    }
     const context = try sdl.video.gl.Context.init(window);
     defer context.deinit() catch {};
 
