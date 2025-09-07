@@ -135,8 +135,8 @@ pub fn init(allocator: std.mem.Allocator) void {
 
     gl.GenTextures(1, @ptrCast(&font_texture));
     gl.BindTexture(gl.TEXTURE_2D, font_texture);
-    const pixels = @embedFile("fonts/font.raw");
-    gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 128, 64, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const pixels = @embedFile("fonts/c64-ibm.raw");
+    gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 128, 128, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -297,8 +297,8 @@ pub fn draw_text(text: []const u8, x: f32, y: f32) void {
         const py1 = py0 + 8;
         const tcx0 = @as(f32, @floatFromInt(c % 16)) / 16.0;
         const tcx1 = tcx0 + 1.0 / 16.0;
-        const tcy0 = @as(f32, @floatFromInt(c / 16)) / 8.0;
-        const tcy1 = tcy0 + 1.0 / 8.0;
+        const tcy0 = @as(f32, @floatFromInt(c / 16)) / 16.0;
+        const tcy1 = tcy0 + 1.0 / 16.0;
 
         vertex_data.appendSliceAssumeCapacity(&.{
             px0, py0, tcx0, tcy0,
