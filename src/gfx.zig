@@ -5,7 +5,7 @@ const la = @import("linear_algebra.zig");
 const vec4 = la.vec4;
 const mat4 = la.mat4;
 
-var vertex_data: std.ArrayList(f32) = undefined;
+var vertex_data: std.array_list.Managed(f32) = undefined;
 var vbo: gl.uint = undefined;
 var font_texture: gl.uint = undefined;
 var arena_frame: std.mem.Allocator = undefined;
@@ -131,7 +131,7 @@ pub const Path = struct {
 };
 
 pub fn init(allocator: std.mem.Allocator) void {
-    vertex_data = std.ArrayList(f32).init(allocator);
+    vertex_data = std.array_list.Managed(f32).init(allocator);
 
     gl.GenTextures(1, @ptrCast(&font_texture));
     gl.BindTexture(gl.TEXTURE_2D, font_texture);

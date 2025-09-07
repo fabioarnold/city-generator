@@ -9,8 +9,8 @@
             .hash = "sdl3-0.0.1-NmT1Q82XIAA_dCjt_VC-iLJkH1wDuyx_4-3mAQHlr2w4",
         },
         .zigglgen = .{
-            .url = "git+https://github.com/castholm/zigglgen.git#0b8261eb00f098ea65e2a1b0a42798a2d1410ccb",
-            .hash = "zigglgen-0.4.0-bmyqLS3sLQC1iF0iqkTqw_bEDhSNK8TQoL_c16DWNbkT",
+            .url = "git+https://github.com/castholm/zigglgen.git#048d4a859bac9eb17743ede5dcab8b9dfa06ab6e",
+            .hash = "zigglgen-0.4.0-bmyqLYHOLgBMnx2o3NRCxM0pqTZ2k72nUBkL5xCm5sU-",
         },
     },
     .paths = .{

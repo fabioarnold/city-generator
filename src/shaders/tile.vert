@@ -1,5 +1,3 @@
-#version 410
-
 uniform mat4 u_projection;
 uniform mat4 u_view;
 
@@ -15,12 +13,12 @@ void main() {
     v_normal = a_normal;
     float rot = a_transform.w;
     vec3 pos = a_position / 8.0;
-    if(rot == 1) {
-        pos.xy = vec2(pos.y, 1 - pos.x);
-    } else if(rot == 2) {
-        pos.xy = vec2(1 - pos.x, 1 - pos.y);
-    } else if(rot == 3) {
-        pos.xy = vec2(1 - pos.y, pos.x);
+    if(rot == 1.0) {
+        pos.xy = vec2(pos.y, 1.0 - pos.x);
+    } else if(rot == 2.0) {
+        pos.xy = vec2(1.0 - pos.x, 1.0 - pos.y);
+    } else if(rot == 3.0) {
+        pos.xy = vec2(1.0 - pos.y, pos.x);
     }
     pos += a_transform.xyz;
     v_texcoords = a_texcoords / vec2(64.0, 168.0);
