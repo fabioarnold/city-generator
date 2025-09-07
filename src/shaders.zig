@@ -50,7 +50,7 @@ pub fn load() !void {
         tile_shader.u_projection = gl.GetUniformLocation(tile_shader.program, "u_projection");
         tile_shader.u_view = gl.GetUniformLocation(tile_shader.program, "u_view");
         tile_shader.u_light_dir = gl.GetUniformLocation(tile_shader.program, "u_light_dir");
-        gl.Uniform3f(tile_shader.u_light_dir, 0.3, 0.5, -1);
+        gl.Uniform3f(tile_shader.u_light_dir, 0.2, 0.5, -1);
     }
 }
 

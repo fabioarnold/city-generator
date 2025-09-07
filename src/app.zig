@@ -35,6 +35,17 @@ const Camera = struct {
 };
 var camera: Camera = .{};
 
+const GLBuilding = struct {
+    vbo: gl.uint,
+    ebo: gl.uint,
+    ibo: gl.uint,
+    index_count: gl.sizei,
+    instance_count: gl.sizei,
+};
+const building_array = tile_data.buildings;
+var gl_buildings: [building_array.len]GLBuilding = undefined;
+var building_instance_data: [building_array.len]std.array_list.Managed(vec4) = undefined;
+
 const GLTile = struct {
     vbo: gl.uint,
     ebo: gl.uint,
@@ -76,6 +87,12 @@ fn update_instance_data() !void {
         gl.BufferData(gl.ARRAY_BUFFER, @intCast(instance_data.items.len * @sizeOf(vec4)), instance_data.items.ptr, gl.DYNAMIC_DRAW);
         gl_tile.instance_count = @intCast(instance_data.items.len);
     }
+
+    for (&gl_buildings, &building_instance_data) |*gl_building, *instance_data| {
+        gl.BindBuffer(gl.ARRAY_BUFFER, gl_building.ibo);
+        gl.BufferData(gl.ARRAY_BUFFER, @intCast(instance_data.items.len * @sizeOf(vec4)), instance_data.items.ptr, gl.DYNAMIC_DRAW);
+        gl_building.instance_count = @intCast(instance_data.items.len);
+    }
 }
 
 pub fn init(arena: std.mem.Allocator) !void {
@@ -101,22 +118,23 @@ pub fn init(arena: std.mem.Allocator) !void {
     debug_draw.init();
     gfx.init(arena);
 
-    camera.position = .{ 32 + 8, 32 - 8, 16 };
-    camera.phi = -45;
-    camera.theta = -55;
+    camera.position = .{ 32 - 12, 32 - 12, 12 };
+    camera.phi = 45;
+    camera.theta = -30;
 
     tilemap = @splat(@splat(.{ .index = 1, .rot = 0 }));
     // do city block
     {
-        const w = 8;
-        const h = 8;
+        const w = 9;
+        const h = 9;
         const street_side = 2;
         const street_zebra = 3;
         const curb = 5;
-        const curb_corner = 6;
+        const curb_center = 6;
+        const curb_corner = 7;
         for (0..h) |y| {
             for (0..w) |x| {
-                tilemap[28 + y][28 + x].index = 0;
+                tilemap[28 + y][28 + x].index = curb_center;
             }
         }
         for (0..w) |x| {
@@ -124,57 +142,91 @@ pub fn init(arena: std.mem.Allocator) !void {
             tilemap[25][28 + x] = .{ .index = street_tile, .rot = 1 };
             tilemap[26][28 + x] = .{ .index = street_tile, .rot = 1 };
             tilemap[27][28 + x] = .{ .index = curb, .rot = 3 };
-            tilemap[36][28 + x] = .{ .index = curb, .rot = 1 };
-            tilemap[37][28 + x] = .{ .index = street_tile, .rot = 1 };
-            tilemap[38][28 + x] = .{ .index = street_tile, .rot = 1 };
+            tilemap[28 + h][28 + x] = .{ .index = curb, .rot = 1 };
+            tilemap[29 + h][28 + x] = .{ .index = street_tile, .rot = 1 };
+            tilemap[30 + h][28 + x] = .{ .index = street_tile, .rot = 1 };
         }
         for (0..h) |y| {
             const street_tile: u6 = if (y == 0 or y == h - 1) street_zebra else street_side;
             tilemap[28 + y][25] = .{ .index = street_tile, .rot = 0 };
             tilemap[28 + y][26] = .{ .index = street_tile, .rot = 0 };
             tilemap[28 + y][27] = .{ .index = curb, .rot = 0 };
-            tilemap[28 + y][36] = .{ .index = curb, .rot = 2 };
-            tilemap[28 + y][37] = .{ .index = street_tile, .rot = 0 };
-            tilemap[28 + y][38] = .{ .index = street_tile, .rot = 0 };
+            tilemap[28 + y][28 + w] = .{ .index = curb, .rot = 2 };
+            tilemap[28 + y][29 + w] = .{ .index = street_tile, .rot = 0 };
+            tilemap[28 + y][30 + w] = .{ .index = street_tile, .rot = 0 };
         }
         tilemap[27][27] = .{ .index = curb_corner, .rot = 3 };
-        tilemap[27][36] = .{ .index = curb_corner, .rot = 2 };
-        tilemap[36][36] = .{ .index = curb_corner, .rot = 1 };
-        tilemap[36][27] = .{ .index = curb_corner, .rot = 0 };
+        tilemap[27][28 + w] = .{ .index = curb_corner, .rot = 2 };
+        tilemap[28 + h][28 + w] = .{ .index = curb_corner, .rot = 1 };
+        tilemap[28 + h][27] = .{ .index = curb_corner, .rot = 0 };
     }
 
-    // per tile instance data
-    for (&tile_instance_data) |*i| i.* = .init(arena);
-    for (0..tilemap.len) |row| {
-        for (0..tilemap[row].len) |col| {
-            const tile = tilemap[row][col];
-            if (tile.index == 0) continue;
-            tile_instance_data[tile.index - 1].append(.{ @floatFromInt(col), @floatFromInt(row), 0, @floatFromInt(tile.rot) }) catch @panic("oom");
+    {
+        // per tile instance data
+        for (&tile_instance_data) |*i| i.* = .init(arena);
+        for (0..tilemap.len) |row| {
+            for (0..tilemap[row].len) |col| {
+                const tile = tilemap[row][col];
+                if (tile.index == 0) continue;
+                tile_instance_data[tile.index - 1].append(.{ @floatFromInt(col), @floatFromInt(row), 0, @floatFromInt(tile.rot) }) catch @panic("oom");
+            }
+        }
+
+        var vbos: [gl_tiles.len]gl.uint = undefined;
+        var ebos: [gl_tiles.len]gl.uint = undefined;
+        var ibos: [gl_tiles.len]gl.uint = undefined;
+        gl.GenBuffers(vbos.len, &vbos);
+        gl.GenBuffers(ebos.len, &ebos);
+        gl.GenBuffers(ibos.len, &ibos);
+        for (&gl_tiles, tile_array, tile_instance_data, vbos, ebos, ibos) |*gl_tile, tile, instance_data, vbo, ebo, ibo| {
+            gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
+            gl.BufferData(gl.ARRAY_BUFFER, @intCast(tile.vertex_data.len * @sizeOf(f32)), tile.vertex_data.ptr, gl.STATIC_DRAW);
+            gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+            gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @intCast(tile.index_data.len * @sizeOf(u16)), tile.index_data.ptr, gl.STATIC_DRAW);
+            if (instance_data.items.len > 0) {
+                gl.BindBuffer(gl.ARRAY_BUFFER, ibo);
+                gl.BufferData(gl.ARRAY_BUFFER, @intCast(instance_data.items.len * @sizeOf(vec4)), instance_data.items.ptr, gl.STATIC_DRAW);
+            }
+            gl_tile.* = .{
+                .vbo = vbo,
+                .ebo = ebo,
+                .ibo = ibo,
+                .index_count = @intCast(tile.index_data.len),
+                .instance_count = @intCast(instance_data.items.len),
+            };
         }
     }
 
-    var vbos: [gl_tiles.len]gl.uint = undefined;
-    var ebos: [gl_tiles.len]gl.uint = undefined;
-    var ibos: [gl_tiles.len]gl.uint = undefined;
-    gl.GenBuffers(vbos.len, &vbos);
-    gl.GenBuffers(ebos.len, &ebos);
-    gl.GenBuffers(ibos.len, &ibos);
-    for (&gl_tiles, tile_array, tile_instance_data, vbos, ebos, ibos) |*gl_tile, tile, instance_data, vbo, ebo, ibo| {
-        gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
-        gl.BufferData(gl.ARRAY_BUFFER, @intCast(tile.vertex_data.len * @sizeOf(f32)), tile.vertex_data.ptr, gl.STATIC_DRAW);
-        gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
-        gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @intCast(tile.index_data.len * @sizeOf(u16)), tile.index_data.ptr, gl.STATIC_DRAW);
-        if (instance_data.items.len > 0) {
-            gl.BindBuffer(gl.ARRAY_BUFFER, ibo);
-            gl.BufferData(gl.ARRAY_BUFFER, @intCast(instance_data.items.len * @sizeOf(vec4)), instance_data.items.ptr, gl.STATIC_DRAW);
+    {
+        for (&building_instance_data) |*i| i.* = .init(arena);
+        try building_instance_data[0].append(.{ 28, 28, 0, 0 });
+        try building_instance_data[0].append(.{ 28, 28 + 8, 0, 1 });
+        try building_instance_data[0].append(.{ 28 + 8, 28 + 8, 0, 2 });
+        try building_instance_data[0].append(.{ 28 + 8, 28, 0, 3 });
+
+        var vbos: [gl_buildings.len]gl.uint = undefined;
+        var ebos: [gl_buildings.len]gl.uint = undefined;
+        var ibos: [gl_buildings.len]gl.uint = undefined;
+        gl.GenBuffers(vbos.len, &vbos);
+        gl.GenBuffers(ebos.len, &ebos);
+        gl.GenBuffers(ibos.len, &ibos);
+        for (&gl_buildings, building_array, building_instance_data, vbos, ebos, ibos) |*gl_building, building, instance_data, vbo, ebo, ibo| {
+            gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
+            gl.BufferData(gl.ARRAY_BUFFER, @intCast(building.vertex_data.len * @sizeOf(f32)), building.vertex_data.ptr, gl.STATIC_DRAW);
+            gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+            gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, @intCast(building.index_data.len * @sizeOf(u16)), building.index_data.ptr, gl.STATIC_DRAW);
+            if (instance_data.items.len > 0) {
+                gl.BindBuffer(gl.ARRAY_BUFFER, ibo);
+                gl.BufferData(gl.ARRAY_BUFFER, @intCast(instance_data.items.len * @sizeOf(vec4)), instance_data.items.ptr, gl.STATIC_DRAW);
+            }
+            gl_building.* = .{
+                .vbo = vbo,
+                .ebo = ebo,
+                .ibo = ibo,
+                .index_count = @intCast(building.index_data.len),
+                .instance_count = @intCast(instance_data.items.len),
+            };
         }
-        gl_tile.* = .{
-            .vbo = vbo,
-            .ebo = ebo,
-            .ibo = ibo,
-            .index_count = @intCast(tile.index_data.len),
-            .instance_count = @intCast(instance_data.items.len),
-        };
     }
 
     gl.GenTextures(1, @ptrCast(&tile_texture));
@@ -281,6 +333,17 @@ fn draw_map(projection: mat4, view: mat4) void {
         gl.VertexAttribPointer(3, 4, gl.FLOAT, gl.FALSE, 4 * @sizeOf(f32), 0);
         gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl_tile.ebo);
         gl.DrawElementsInstanced(gl.TRIANGLES, gl_tile.index_count, gl.UNSIGNED_SHORT, 0, gl_tile.instance_count);
+    }
+
+    for (gl_buildings) |gl_building| {
+        gl.BindBuffer(gl.ARRAY_BUFFER, gl_building.vbo);
+        gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 8 * @sizeOf(f32), 0);
+        gl.VertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 8 * @sizeOf(f32), 3 * @sizeOf(f32));
+        gl.VertexAttribPointer(2, 2, gl.FLOAT, gl.FALSE, 8 * @sizeOf(f32), 6 * @sizeOf(f32));
+        gl.BindBuffer(gl.ARRAY_BUFFER, gl_building.ibo);
+        gl.VertexAttribPointer(3, 4, gl.FLOAT, gl.FALSE, 4 * @sizeOf(f32), 0);
+        gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl_building.ebo);
+        gl.DrawElementsInstanced(gl.TRIANGLES, gl_building.index_count, gl.UNSIGNED_SHORT, 0, gl_building.instance_count);
     }
     gl.DisableVertexAttribArray(0);
     gl.DisableVertexAttribArray(1);
