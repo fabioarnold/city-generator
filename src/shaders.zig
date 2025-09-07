@@ -21,8 +21,9 @@ pub const gfx_shader = struct {
 
 pub const tile_shader = struct {
     pub var program: gl.uint = undefined;
-    pub var projection_loc: gl.int = undefined;
-    pub var view_loc: gl.int = undefined;
+    pub var u_projection: gl.int = undefined;
+    pub var u_view: gl.int = undefined;
+    pub var u_light_dir: gl.int = undefined;
 };
 
 pub fn load() void {
@@ -46,8 +47,10 @@ pub fn load() void {
     {
         tile_shader.program = load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/tile.frag"));
         gl.UseProgram(tile_shader.program);
-        tile_shader.projection_loc = gl.GetUniformLocation(tile_shader.program, "u_projection");
-        tile_shader.view_loc = gl.GetUniformLocation(tile_shader.program, "u_view");
+        tile_shader.u_projection = gl.GetUniformLocation(tile_shader.program, "u_projection");
+        tile_shader.u_view = gl.GetUniformLocation(tile_shader.program, "u_view");
+        tile_shader.u_light_dir = gl.GetUniformLocation(tile_shader.program, "u_light_dir");
+        gl.Uniform3f(tile_shader.u_light_dir, 0.3, 0.5, -1);
     }
 }
 
