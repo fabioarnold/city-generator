@@ -57,9 +57,9 @@ export fn on_resize(width: c_uint, height: c_uint, scale: f32) callconv(.c) void
 
 var t_prev: f32 = 0;
 export fn on_animation_frame() callconv(.c) void {
-    const t: f32 = @floatCast(wasm.performance.now() / 1000.0);
-    time.dt = t - t_prev;
-    t_prev = t;
+    t_prev = time.seconds;
+    time.seconds = @floatCast(wasm.performance.now() / 1000.0);
+    time.dt = time.seconds - t_prev;
 
     gl.ClearColor(0.2, 0.4, 0.6, 1);
     gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);

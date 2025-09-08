@@ -65,10 +65,10 @@ var tile_texture: gl.uint = undefined;
 var gl_tiles: [tile_array.len]GLTile = undefined;
 var tile_instance_data: [tile_array.len]std.array_list.Managed(vec4) = undefined;
 
-const box_x = 16;
-const box_y = 16;
-const box_w = 168;
-const box_h = 688;
+const box_x = 32;
+var box_y: f32 = 200;
+const box_w = 184 + 12;
+const box_h = 266;
 
 var current_tile: Tile = .{ .index = 0, .rot = 0 };
 
@@ -254,11 +254,13 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
     if (input.key_down(.down)) camera.theta -= angular_speed * time.dt;
     camera.position += la.vec3_from_vec4(la.mul_vector(la.rotation(-camera.phi, .{ 0, 0, 1 }), move));
 
+    box_y = video_height / 2 - box_h / 2;
     const tilepicker_hover = math.point_in_rect(input.mx, input.my, box_x, box_y, box_w, box_h);
 
-    // const projection = la.ortho(-6.4, 6.4, -3.6, 3.6, -100, 100);
     const aspect_ratio = video_width / video_height;
-    const projection = la.perspective(45, aspect_ratio, 0.1);
+    const scale: f32 = 10;
+    // const projection = la.perspective(45, aspect_ratio, 0.1);
+    const projection = la.ortho(-aspect_ratio * scale, aspect_ratio * scale, -scale, scale, -100, 100);
     const view = camera.view();
 
     // screen to world
@@ -356,16 +358,23 @@ fn draw_tilepicker(frame_arena: std.mem.Allocator, projection: mat4) !void {
     gfx.begin(&projection, &la.identity());
 
     var box_path = try gfx.Path.init(frame_arena, 100);
-    box_path.rect_rounded(16, 16, box_w, box_h, 8);
-    gfx.set_color(.{ 0.95, 0.95, 0.95, 1 });
+    box_path.rect_rounded(box_x, box_y, box_w, box_h, 4);
+    gfx.set_color(.{ 0.93, 0.91, 0.9, 1 });
     try gfx.fill_path(&box_path);
-    gfx.set_color(.{ 0, 0, 0, 1 });
+    gfx.set_color(.{ 0.3, 0.3, 0.3, 1 });
     gfx.set_stroke_width(2);
     try gfx.stroke_path(&box_path);
 
-    gfx.set_color(.{ 0, 0, 0, 1 });
-    gfx.transform(&la.scale(2, 2, 1));
-    gfx.draw_text("Toolbox", 16, 16);
+    gfx.transform(&la.mul(la.translation(box_x + 7, box_y, 0), la.scale(2, 2, 1)));
+    gfx.set_color(.{ 0.3, 0.3, 0.3, 1 });
+    gfx.draw_text("TILE PICKER", 7, 7);
+    gfx.draw_text("TILE PICKER", 7, 8);
+    gfx.draw_text("TILE PICKER", 7, 9);
+    gfx.draw_text("TILE PICKER", 9, 7);
+    gfx.draw_text("TILE PICKER", 9, 8);
+    gfx.draw_text("TILE PICKER", 9, 9);
+    gfx.set_color(.{ 1, 1, 1, 1 });
+    gfx.draw_text("TILE PICKER", 8, 8);
     gfx.transform(&la.identity());
 
     if (true) {
@@ -381,20 +390,27 @@ fn draw_tilepicker(frame_arena: std.mem.Allocator, projection: mat4) !void {
         gl.EnableVertexAttribArray(1);
         gl.EnableVertexAttribArray(2);
         gl.DisableVertexAttribArray(3);
+        const tile_width = 48;
+        const tile_height = 32;
+        const ncols = 3;
+        const pad = 28;
         for (gl_tiles, 0..) |gl_tile, i| {
-            const x: f32 = 16 + f32_i(i % 4) * (32 + 8) + 8;
-            const y: f32 = 16 + 32 + f32_i(i / 4) * (32 + 8) + 8;
-            const hover = math.point_in_rect(input.mx, input.my, x, y, 32, 32);
+            const x: f32 = box_x + f32_i(i % ncols) * (tile_width) + pad;
+            var y: f32 = box_y + 16 + f32_i(i / ncols) * (tile_height + pad) + pad;
+            if ((i % ncols) == 1) y += (tile_height + pad) / 2;
+            const hover = math.point_in_rect(input.mx, input.my, x, y, tile_width, tile_width);
+            const scale: f32 = if (hover) 1.2 else 1;
             const iso = muln(&.{
-                la.translation(16, 16, 0),
+                la.translation(tile_width / 2, tile_width / 2, 0),
+                la.scale(scale, scale, scale),
                 la.rotation(45, .{ 1, 0, 0 }),
                 la.rotation(if (hover) time.seconds * 360 else 45, .{ 0, 0, 1 }),
-                la.translation(-16, -16, 0),
+                la.translation(-tile_width / 2, -tile_width / 2, 0),
             });
             const model = muln(&.{
                 la.translation(x, y, -32),
                 iso,
-                la.scale(32, 32, 32),
+                la.scale(tile_width, tile_width, tile_width),
             });
             gl.UniformMatrix4fv(shaders.tile_shader.u_view, 1, gl.FALSE, @ptrCast(&model));
             gl.BindBuffer(gl.ARRAY_BUFFER, gl_tile.vbo);

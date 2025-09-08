@@ -309,7 +309,7 @@ pub fn draw_text(text: []const u8, x: f32, y: f32) void {
             px0, py1, tcx0, tcy1,
         });
 
-        px0 += 8;
+        px0 += 7;
     }
 
     gl.EnableVertexAttribArray(0);

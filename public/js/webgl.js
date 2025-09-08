@@ -5,7 +5,7 @@ let gl;
 function init_webgl() {
   let webglOptions = {
     alpha: true, //Boolean that indicates if the canvas contains an alpha buffer.
-    antialias: false,  //Boolean that indicates whether or not to perform anti-aliasing.
+    antialias: true,  //Boolean that indicates whether or not to perform anti-aliasing.
     depth: 32,  //Boolean that indicates that the drawing buffer has a depth buffer of at least 16 bits.
     failIfMajorPerformanceCaveat: false,  //Boolean that indicates if a context will be created if the system performance is low.
     powerPreference: "default", //A hint to the user agent indicating what configuration of GPU is suitable for the WebGL context. Possible values are:

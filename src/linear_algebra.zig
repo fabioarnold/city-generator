@@ -52,7 +52,7 @@ pub fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) 
     return mat4{
         .{ 2 / right_left, 0, 0, 0 },
         .{ 0, 2 / top_bottom, 0, 0 },
-        .{ 0, 0, -2 / far_near, 0 },
+        .{ 0, 0, 2 / far_near, 0 },
         .{
             -(right + left) / right_left,
             -(top + bottom) / top_bottom,
