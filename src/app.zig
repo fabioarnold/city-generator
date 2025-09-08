@@ -252,6 +252,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
     if (input.key_down(.left)) camera.phi -= angular_speed * time.dt;
     if (input.key_down(.up)) camera.theta += angular_speed * time.dt;
     if (input.key_down(.down)) camera.theta -= angular_speed * time.dt;
+    camera.theta = std.math.clamp(camera.theta, -89, 89);
     camera.position += la.vec3_from_vec4(la.mul_vector(la.rotation(-camera.phi, .{ 0, 0, 1 }), move));
 
     box_y = video_height / 2 - box_h / 2;
@@ -273,7 +274,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
         };
         const ndc_far: vec4 = .{ ndc_near[0], ndc_near[1], -ndc_near[2], ndc_near[3] };
 
-        const inv = la.invert(mul(projection, view)).?;
+        const inv = la.invert(mul(projection, view)) orelse break :blk vec3{ 0, 0, 0 };
         var world_near = la.mul_vector(inv, ndc_near);
         var world_far = la.mul_vector(inv, ndc_far);
         world_near /= @splat(world_near[3]); // div by w
