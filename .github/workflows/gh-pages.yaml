@@ -1,4 +1,4 @@
-name: github pages
+name: Deploy to GitHub Pages
 
 on:
   push:
@@ -19,23 +19,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install Zig and build the wasm binary
-        run: |
-          VERSION=0.15.1
-          mkdir /tmp/zig
-          pushd /tmp/zig
-          curl -LO https://ziglang.org/download/$VERSION/zig-x86_64-linux-$VERSION.tar.xz
-          tar -xf zig-x86_64-linux-$VERSION.tar.xz
-          popd
-          /tmp/zig/zig-x86_64-linux-$VERSION/zig build -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
         with:
-          # Deploy only the site files
+          version: 0.15.1
+      - run: zig build -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
           path: 'zig-out'
       - name: Deploy to GitHub Pages
         id: deployment
