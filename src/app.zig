@@ -14,6 +14,8 @@ const vec4 = la.vec4;
 const mat4 = la.mat4;
 const mul = la.mul;
 const muln = la.muln;
+const GBuffer = @import("gbuffer.zig");
+const primitives = @import("primitives.zig");
 
 pub var video_width: f32 = 1280;
 pub var video_height: f32 = 720;
@@ -65,6 +67,8 @@ var tile_texture: gl.uint = undefined;
 var gl_tiles: [tile_array.len]GLTile = undefined;
 var tile_instance_data: [tile_array.len]std.array_list.Managed(vec4) = undefined;
 
+var gbuffer: GBuffer = undefined;
+
 const box_x = 32;
 var box_y: f32 = 200;
 const box_w = 184 + 12;
@@ -99,11 +103,8 @@ pub fn init(arena: std.mem.Allocator) !void {
     // Set up reverse Z: https://tomhultonharrop.com/mathematics/graphics/2023/08/06/reverse-z.html
     gl.Enable(gl.DEPTH_TEST);
     gl.DepthFunc(gl.GREATER);
-    if (std.meta.hasFn(gl, "ClearDepth")) {
-        gl.ClearDepth(0); // GL
-    } else {
-        gl.ClearDepthf(0); // GL ES
-    }
+    const glClearDepth = if (@hasDecl(gl, "ClearDepth")) gl.ClearDepth else gl.ClearDepthf;
+    glClearDepth(0);
 
     // Blending
     gl.Enable(gl.BLEND);
@@ -116,11 +117,15 @@ pub fn init(arena: std.mem.Allocator) !void {
 
     try shaders.load();
     debug_draw.init();
+    primitives.init();
     gfx.init(arena);
 
     camera.position = .{ 32 - 12, 32 - 12, 12 };
     camera.phi = 45;
-    camera.theta = -30;
+    camera.theta = -26.565;
+
+    gbuffer = .init(640, 400);
+    try gbuffer.create();
 
     tilemap = @splat(@splat(.{ .index = 1, .rot = 0 }));
     // do city block
@@ -238,7 +243,7 @@ pub fn init(arena: std.mem.Allocator) !void {
     gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 }
 
-pub fn draw(frame_arena: std.mem.Allocator) void {
+fn update() void {
     const move_speed = 25;
     const angular_speed = 90;
     var move: vec4 = @splat(0);
@@ -256,7 +261,10 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
     camera.position += la.vec3_from_vec4(la.mul_vector(la.rotation(-camera.phi, .{ 0, 0, 1 }), move));
 
     box_y = video_height / 2 - box_h / 2;
-    const tilepicker_hover = math.point_in_rect(input.mx, input.my, box_x, box_y, box_w, box_h);
+}
+
+pub fn draw(frame_arena: std.mem.Allocator) void {
+    update();
 
     const aspect_ratio = video_width / video_height;
     const scale: f32 = 10;
@@ -286,6 +294,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
         break :blk origin + @as(vec3, @splat(t)) * dir;
     };
 
+    const tilepicker_hover = math.point_in_rect(input.mx, input.my, box_x, box_y, box_w, box_h);
     if (input.down and !tilepicker_hover) {
         const x: i32 = @intFromFloat(@round(cursor_pos[0] - 0.5));
         const y: i32 = @intFromFloat(@round(cursor_pos[1] - 0.5));
@@ -299,9 +308,27 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
 
     gfx.begin_frame(frame_arena, video_scale);
 
-    gl.Enable(gl.DEPTH_TEST);
-    draw_map(projection, view);
-    gl.Disable(gl.DEPTH_TEST);
+    // draw to gbuffer at lower res
+    {
+        const width: u16 = @intFromFloat(video_scale * video_width);
+        const height: u16 = @intFromFloat(video_scale * video_height);
+        gbuffer.resize(width / 8, height / 8);
+
+        gbuffer.begin();
+        gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        defer {
+            gbuffer.end();
+            gl.Viewport(0, 0, width, height);
+        }
+
+        gl.Enable(gl.DEPTH_TEST);
+        draw_map(projection, view);
+        gl.Disable(gl.DEPTH_TEST);
+    }
+
+    gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_color);
+    gl.UseProgram(shaders.blit_shader.program);
+    primitives.quad();
 
     {
         // draw cursor highlight quad

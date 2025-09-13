@@ -145,7 +145,7 @@ pub fn init(allocator: std.mem.Allocator) void {
     gl.GenBuffers(1, @ptrCast(&vbo));
 
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.Uniform4f(shaders.gfx_shader.color_loc, 1, 1, 1, 1);
+    gl.Uniform4f(shaders.gfx_shader.u_color, 1, 1, 1, 1);
 
     reset();
 }
@@ -167,18 +167,18 @@ pub fn begin_frame(arena: std.mem.Allocator, pixel_ratio: f32) void {
 
 pub fn begin(projection: *const mat4, view: *const mat4) void {
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.UniformMatrix4fv(shaders.gfx_shader.projection_loc, 1, gl.FALSE, @ptrCast(projection));
-    gl.UniformMatrix4fv(shaders.gfx_shader.view_loc, 1, gl.FALSE, @ptrCast(view));
+    gl.UniformMatrix4fv(shaders.gfx_shader.u_projection, 1, gl.FALSE, @ptrCast(projection));
+    gl.UniformMatrix4fv(shaders.gfx_shader.u_view, 1, gl.FALSE, @ptrCast(view));
 }
 
 pub fn transform(model: *const mat4) void {
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.UniformMatrix4fv(shaders.gfx_shader.model_loc, 1, gl.FALSE, @ptrCast(model));
+    gl.UniformMatrix4fv(shaders.gfx_shader.u_model, 1, gl.FALSE, @ptrCast(model));
 }
 
 pub fn set_color(color: vec4) void {
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.Uniform4fv(shaders.gfx_shader.color_loc, 1, @ptrCast(&color));
+    gl.Uniform4fv(shaders.gfx_shader.u_color, 1, @ptrCast(&color));
 }
 
 pub fn set_stroke_width(width: f32) void {
@@ -192,7 +192,7 @@ pub fn fill_path(path: *const Path) !void {
     try cache.calculate_joins();
 
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.Uniform1i(shaders.gfx_shader.colormap_enabled_loc, 0);
+    gl.Uniform1i(shaders.gfx_shader.u_colormap_enabled, 0);
 
     for (cache.paths.items) |sub_path| {
         vertex_data.clearRetainingCapacity();
@@ -249,7 +249,7 @@ pub fn stroke_path(path: *const Path) !void {
     gl.VertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 2 * @sizeOf(f32), 0);
 
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.Uniform1i(shaders.gfx_shader.colormap_enabled_loc, 0);
+    gl.Uniform1i(shaders.gfx_shader.u_colormap_enabled, 0);
 
     for (cache.paths.items) |sub_path| {
         gl.DrawArrays(gl.TRIANGLE_STRIP, @intCast(sub_path.vertex_offset), @intCast(sub_path.vertex_count));
@@ -278,7 +278,7 @@ pub fn fill_rect(x: f32, y: f32, w: f32, h: f32) void {
     gl.VertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 2 * @sizeOf(f32), 0);
 
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.Uniform1i(shaders.gfx_shader.colormap_enabled_loc, 0);
+    gl.Uniform1i(shaders.gfx_shader.u_colormap_enabled, 0);
     gl.DrawArrays(gl.TRIANGLE_FAN, 0, 4);
 }
 
@@ -320,7 +320,7 @@ pub fn draw_text(text: []const u8, x: f32, y: f32) void {
     gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, 4 * @sizeOf(f32), 2 * @sizeOf(f32));
 
     gl.UseProgram(shaders.gfx_shader.program);
-    gl.Uniform1i(shaders.gfx_shader.colormap_enabled_loc, 1);
+    gl.Uniform1i(shaders.gfx_shader.u_colormap_enabled, 1);
     gl.BindTexture(gl.TEXTURE_2D, font_texture);
     gl.DrawArrays(gl.TRIANGLES, 0, @intCast(6 * text.len));
 }
