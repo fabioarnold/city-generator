@@ -5,6 +5,7 @@ pub const vec2 = @Vector(2, f32);
 pub const vec3 = @Vector(3, f32);
 pub const vec4 = @Vector(4, f32);
 pub const quat = vec4;
+pub const mat3 = [3][3]f32; // can't use vec3 because of alignment
 pub const mat4 = [4]vec4;
 
 pub fn vec3_from_vec4(v4: vec4) vec3 {
@@ -21,6 +22,14 @@ pub fn identity() mat4 {
         .{ 0, 1, 0, 0 },
         .{ 0, 0, 1, 0 },
         .{ 0, 0, 0, 1 },
+    };
+}
+
+pub fn identity3() mat3 {
+    return .{
+        .{ 1, 0, 0 },
+        .{ 0, 1, 0 },
+        .{ 0, 0, 1 },
     };
 }
 
@@ -337,7 +346,8 @@ pub fn mul(m0: mat4, m1: mat4) mat4 {
 }
 
 pub fn muln(m: []const mat4) mat4 {
-    assert(m.len > 2);
+    if (m.len == 1) return m[0];
+    assert(m.len >= 2);
     var result: mat4 = mul(m[0], m[1]);
     for (m[2..]) |e| result = mul(result, e);
     return result;
