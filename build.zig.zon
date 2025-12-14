@@ -12,6 +12,10 @@
             .url = "git+https://github.com/castholm/zigglgen.git#048d4a859bac9eb17743ede5dcab8b9dfa06ab6e",
             .hash = "zigglgen-0.4.0-bmyqLYHOLgBMnx2o3NRCxM0pqTZ2k72nUBkL5xCm5sU-",
         },
+        .zgltf = .{
+            .url = "git+https://github.com/kooparse/zgltf.git#ec52d477db346af99d4cdced4e35e67e1670023f",
+            .hash = "zgltf-0.1.0-sX6QAt0SAgDzMQCCG-N181hVbx8JnwFYZ3luQigQpVBM",
+        },
     },
     .paths = .{
         "build.zig",

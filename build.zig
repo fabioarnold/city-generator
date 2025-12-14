@@ -17,6 +17,8 @@ fn build_wasm(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
         .version = .@"3.0",
         .extensions = &.{},
     });
+    const zgltf = b.dependency("zgltf", .{ .target = target, .optimize = optimize });
+
     const wasm = b.addExecutable(.{
         .name = "main",
         .root_module = b.createModule(.{
@@ -25,6 +27,7 @@ fn build_wasm(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "gl", .module = gl_bindings },
+                .{ .name = "zgltf", .module = zgltf.module("zgltf") },
             },
         }),
     });

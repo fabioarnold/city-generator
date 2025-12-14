@@ -31,6 +31,13 @@ pub const tile_shader = struct {
     pub var u_light_dir: gl.int = undefined;
 };
 
+pub const default = struct {
+    pub var program: gl.uint = undefined;
+    pub var u_projection: gl.int = undefined;
+    pub var u_view: gl.int = undefined;
+    pub var u_model: gl.int = undefined;
+};
+
 pub fn load() !void {
     {
         debug_shader.program = try load_shader(@embedFile("shaders/position.vert"), @embedFile("shaders/debug.frag"));
@@ -54,6 +61,14 @@ pub fn load() !void {
         gl.Uniform1i(gl.GetUniformLocation(gfx_shader.program, "u_colormap"), 0);
         gfx_shader.u_color = gl.GetUniformLocation(gfx_shader.program, "u_color");
         gfx_shader.u_colormap_enabled = gl.GetUniformLocation(gfx_shader.program, "u_colormap_enabled");
+    }
+    {
+        default.program = try load_shader(@embedFile("shaders/default.vert"), @embedFile("shaders/default.frag"));
+        gl.UseProgram(default.program);
+        default.u_projection = gl.GetUniformLocation(default.program, "u_projection");
+        default.u_view = gl.GetUniformLocation(default.program, "u_view");
+        default.u_model = gl.GetUniformLocation(default.program, "u_model");
+        gl.Uniform1i(gl.GetUniformLocation(default.program, "u_colormap"), 0);
     }
     {
         tile_shader.program = try load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/tile.frag"));

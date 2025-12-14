@@ -228,6 +228,7 @@ pub fn fill_path(path: *const Path) !void {
             gl.StencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
             gl.DrawArrays(gl.TRIANGLE_FAN, 0, @intCast(sub_path.points.items.len));
         }
+        gl.DisableVertexAttribArray(0);
     }
 }
 
@@ -254,6 +255,7 @@ pub fn stroke_path(path: *const Path) !void {
     for (cache.paths.items) |sub_path| {
         gl.DrawArrays(gl.TRIANGLE_STRIP, @intCast(sub_path.vertex_offset), @intCast(sub_path.vertex_count));
     }
+    gl.DisableVertexAttribArray(0);
 }
 
 pub fn fill_rect(x: f32, y: f32, w: f32, h: f32) void {
@@ -280,6 +282,7 @@ pub fn fill_rect(x: f32, y: f32, w: f32, h: f32) void {
     gl.UseProgram(shaders.gfx_shader.program);
     gl.Uniform1i(shaders.gfx_shader.u_colormap_enabled, 0);
     gl.DrawArrays(gl.TRIANGLE_FAN, 0, 4);
+    gl.DisableVertexAttribArray(0);
 }
 
 pub fn draw_text(text: []const u8, x: f32, y: f32) void {
@@ -323,6 +326,8 @@ pub fn draw_text(text: []const u8, x: f32, y: f32) void {
     gl.Uniform1i(shaders.gfx_shader.u_colormap_enabled, 1);
     gl.BindTexture(gl.TEXTURE_2D, font_texture);
     gl.DrawArrays(gl.TRIANGLES, 0, @intCast(6 * text.len));
+    gl.DisableVertexAttribArray(1);
+    gl.DisableVertexAttribArray(0);
 }
 
 const Point = struct {
