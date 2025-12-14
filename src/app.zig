@@ -157,7 +157,7 @@ pub fn init(arena: std.mem.Allocator) !void {
 }
 
 var key_down_r: bool = false;
-var key_down_s: bool = false;
+var key_down_x: bool = false;
 
 fn update() void {
     const move_speed = 25;
@@ -183,10 +183,10 @@ fn update() void {
     }
     key_down_r = input.key_down(.r);
 
-    if (input.key_down(.s) and !key_down_s) {
+    if (input.key_down(.x) and !key_down_x) {
         dump_tilemap();
     }
-    key_down_s = input.key_down(.s);
+    key_down_x = input.key_down(.x);
 }
 
 fn dump_tilemap() void {
@@ -296,6 +296,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
 
     if (true) {
         const ortho = la.ortho(0, video_width, video_height, 0, -1000, 1000);
+        gl.Clear(gl.DEPTH_BUFFER_BIT);
         // const ortho = la.ortho(0, video_width, 0, video_height, -1, 1);
         draw_tilepicker(frame_arena, ortho) catch @panic("oom");
     }
