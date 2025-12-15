@@ -360,8 +360,14 @@ const glDeleteRenderbuffers = (n, renderbuffers) => {
   }
 }
 const glRenderbufferStorage = (target, internalFormat, width, height) => gl.renderbufferStorage(target, internalFormat, width, height);
+const glRenderbufferStorageMultisample = (target, samples, internalFormat, width, height) => gl.renderbufferStorageMultisample(target, samples, internalFormat, width, height);
 const glFramebufferTexture2D = (target, attachment, textarget, texture, level) => gl.framebufferTexture2D(target, attachment, textarget, glTextures[texture], level);
 const glFramebufferRenderbuffer = (target, attachment, renderbuffertarget, renderbuffer) => gl.framebufferRenderbuffer(target, attachment, renderbuffertarget, glRenderbuffers[renderbuffer]);
+const glBlitFramebuffer = (srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter) => gl.blitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+const glDrawBuffers = (n, drawBuffers) => {
+  const buffers = new Uint32Array(memory.buffer, drawBuffers, n);
+  gl.drawBuffers(buffers);
+};
 const glGetIntegerv = (pname, param) => {
   let result = gl.getParameter(pname);
   if (!result) result = new Uint32Array([0]);
@@ -456,7 +462,10 @@ const webgl_env = {
   glBindRenderbuffer,
   glDeleteRenderbuffers,
   glRenderbufferStorage,
+  glRenderbufferStorageMultisample,
   glFramebufferTexture2D,
   glFramebufferRenderbuffer,
+  glBlitFramebuffer,
+  glDrawBuffers,
   glGetIntegerv,
 };

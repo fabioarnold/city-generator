@@ -38,6 +38,10 @@ pub const default = struct {
     pub var u_model: gl.int = undefined;
 };
 
+pub const cavity = struct {
+    pub var program: gl.uint = undefined;
+};
+
 pub fn load() !void {
     {
         debug_shader.program = try load_shader(@embedFile("shaders/position.vert"), @embedFile("shaders/debug.frag"));
@@ -69,6 +73,13 @@ pub fn load() !void {
         default.u_view = gl.GetUniformLocation(default.program, "u_view");
         default.u_model = gl.GetUniformLocation(default.program, "u_model");
         gl.Uniform1i(gl.GetUniformLocation(default.program, "u_colormap"), 0);
+    }
+    {
+        cavity.program = try load_shader(@embedFile("shaders/blit.vert"), @embedFile("shaders/ssao.frag"));
+        gl.UseProgram(cavity.program);
+        gl.Uniform1i(gl.GetUniformLocation(cavity.program, "u_colormap"), 0);
+        gl.Uniform1i(gl.GetUniformLocation(cavity.program, "u_normalmap"), 1);
+        gl.Uniform1i(gl.GetUniformLocation(cavity.program, "u_depthmap"), 2);
     }
     {
         tile_shader.program = try load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/tile.frag"));

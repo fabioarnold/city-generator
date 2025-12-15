@@ -75,9 +75,9 @@ pub fn init(arena: std.mem.Allocator) !void {
     primitives.init();
     gfx.init(arena);
 
-    camera.position = .{ -4, -4, 3 };
-    camera.phi = 45;
-    camera.theta = -26.565;
+    camera.position = .{ 0, 1, 0.7 };
+    camera.phi = 60;
+    camera.theta = -15;
 
     gbuffer = .init(640, 400);
     try gbuffer.create();
@@ -92,8 +92,8 @@ pub fn init(arena: std.mem.Allocator) !void {
         .{ .index = 9, .rot = 1 },
         .{ .index = 10, .rot = 2 },
         .{ .index = 9, .rot = 0 },
-        .{ .index = 7, .rot = 3 },
-        .{ .index = 1, .rot = 2 },
+        .{ .index = 1, .rot = 3 },
+        .{ .index = 5, .rot = 0 },
         .{ .index = 9, .rot = 2 },
         .{ .index = 1, .rot = 0 },
         .{ .index = 9, .rot = 2 },
@@ -160,7 +160,7 @@ var key_down_r: bool = false;
 var key_down_x: bool = false;
 
 fn update() void {
-    const move_speed = 25;
+    const move_speed = 10;
     const angular_speed = 90;
     var move: vec4 = @splat(0);
     if (input.key_down(.d)) move[0] += move_speed * time.dt;
@@ -241,7 +241,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
 
     gfx.begin_frame(frame_arena, video_scale);
 
-    if (false) {
+    {
         // draw to gbuffer at lower res
         {
             const width: u16 = @intFromFloat(video_scale * video_width);
@@ -256,36 +256,21 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
             }
 
             gl.Enable(gl.DEPTH_TEST);
-            //draw_map(projection, view);
+            draw_map(projection, view);
             gl.Disable(gl.DEPTH_TEST);
         }
 
         gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_color);
-        gl.UseProgram(shaders.blit_shader.program);
+        gl.ActiveTexture(gl.TEXTURE1);
+        gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_normal);
+        gl.ActiveTexture(gl.TEXTURE2);
+        gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_depth);
+        gl.ActiveTexture(gl.TEXTURE0);
+        gl.UseProgram(shaders.cavity.program);
         primitives.quad();
-    } else {
-        gl.Enable(gl.DEPTH_TEST);
-        gl.UseProgram(shaders.default.program);
-        gl.UniformMatrix4fv(shaders.default.u_projection, 1, gl.FALSE, @ptrCast(&projection));
-        gl.UniformMatrix4fv(shaders.default.u_view, 1, gl.FALSE, @ptrCast(&view));
-        const si: Model.ShaderInfo = .{ .model_loc = shaders.default.u_model };
-
-        for (tilemap, 0..) |row, y| {
-            for (row, 0..) |tile, x| {
-                if (tile.index > 0) {
-                    const model = muln(&.{
-                        la.translation(f32_i(x) + 0.5, f32_i(y) + 0.5, 0),
-                        la.rotation(f32_i(tile.rot) * 90, .{ 0, 0, 1 }),
-                        la.scale(0.5, 0.5, 0.5),
-                    });
-                    assets.model_tiles[tile.index - 1].draw(si, model);
-                }
-            }
-        }
-        gl.Disable(gl.DEPTH_TEST);
     }
 
-    {
+    if (false) {
         // draw cursor highlight quad
         debug_draw.begin(&projection, &view);
         const tile_x = @round(cursor_pos[0] - 0.5);
@@ -299,6 +284,26 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
         gl.Clear(gl.DEPTH_BUFFER_BIT);
         // const ortho = la.ortho(0, video_width, 0, video_height, -1, 1);
         draw_tilepicker(frame_arena, ortho) catch @panic("oom");
+    }
+}
+
+fn draw_map(projection: mat4, view: mat4) void {
+    gl.UseProgram(shaders.default.program);
+    gl.UniformMatrix4fv(shaders.default.u_projection, 1, gl.FALSE, @ptrCast(&projection));
+    gl.UniformMatrix4fv(shaders.default.u_view, 1, gl.FALSE, @ptrCast(&view));
+    const si: Model.ShaderInfo = .{ .model_loc = shaders.default.u_model };
+
+    for (tilemap, 0..) |row, y| {
+        for (row, 0..) |tile, x| {
+            if (tile.index > 0) {
+                const model = muln(&.{
+                    la.translation(f32_i(x) + 0.5, f32_i(y) + 0.5, 0),
+                    la.rotation(f32_i(tile.rot) * 90, .{ 0, 0, 1 }),
+                    la.scale(0.5, 0.5, 0.5),
+                });
+                assets.model_tiles[tile.index - 1].draw(si, model);
+            }
+        }
     }
 }
 

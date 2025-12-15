@@ -261,8 +261,11 @@ pub extern fn glGenRenderbuffers(n: GLsizei, renderbuffers: [*c]GLuint) callconv
 pub extern fn glBindRenderbuffer(target: GLenum, renderbuffer: GLuint) callconv(.c) void;
 pub extern fn glDeleteRenderbuffers(n: GLsizei, renderbuffers: [*c]const GLuint) callconv(.c) void;
 pub extern fn glRenderbufferStorage(target: GLenum, internalformat: GLenum, width: GLsizei, height: GLsizei) callconv(.c) void;
+pub extern fn glRenderbufferStorageMultisample(target: GLenum, samples: GLsizei, internalformat: GLenum, width: GLsizei, height: GLsizei) callconv(.c) void;
 pub extern fn glFramebufferTexture2D(target: GLenum, attachment: GLenum, textarget: GLenum, texture: GLuint, level: GLint) callconv(.c) void;
 pub extern fn glFramebufferRenderbuffer(target: GLenum, attachment: GLenum, renderbuffertarget: GLenum, renderbuffer: GLuint) callconv(.c) void;
+pub extern fn glBlitFramebuffer(srcX0: GLint, srcY0: GLint, srcX1: GLint, srcY1: GLint, dstX0: GLint, dstY0: GLint, dstX1: GLint, dstY1: GLint, mask: GLbitfield, filter: GLenum) callconv(.c) void;
+pub extern fn glDrawBuffers(n: GLsizei, bufs: [*]const GLenum) callconv(.c) void;
 
 // Convenience
 
