@@ -160,7 +160,7 @@ var key_down_r: bool = false;
 var key_down_x: bool = false;
 
 fn update() void {
-    const move_speed = 10;
+    const move_speed = 1;
     const angular_speed = 90;
     var move: vec4 = @splat(0);
     if (input.key_down(.d)) move[0] += move_speed * time.dt;
@@ -307,6 +307,13 @@ fn draw_map(projection: mat4, view: mat4) void {
             }
         }
     }
+
+    const model = muln(&.{
+        la.translation(0.15 + 0.5, 1 + 0.5, 0.07 * 0.5),
+        la.rotation(180, .{ 0, 0, 1 }),
+        la.scale(0.1, 0.1, 0.1),
+    });
+    assets.model_car_small.draw(si, model);
 }
 
 fn draw_tilepicker(frame_arena: std.mem.Allocator, projection: mat4) !void {

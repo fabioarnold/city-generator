@@ -14,8 +14,10 @@ const model_road_corner_glb align(4) = @embedFile("models/road_corner.glb").*;
 const model_road_crossing_glb align(4) = @embedFile("models/road_crossing.glb").*;
 const model_road_tsplit_glb align(4) = @embedFile("models/road_tsplit.glb").*;
 const model_road_junction_glb align(4) = @embedFile("models/road_junction.glb").*;
+const model_car_small_glb align(4) = @embedFile("models/car_small.glb").*;
 
 pub var model_tiles: [13]Model = undefined;
+pub var model_car_small:Model = undefined;
 
 pub fn load(allocator: std.mem.Allocator) !void {
     try model_tiles[0].load(allocator, &model_building_a_glb);
@@ -31,4 +33,5 @@ pub fn load(allocator: std.mem.Allocator) !void {
     try model_tiles[10].load(allocator, &model_road_crossing_glb);
     try model_tiles[11].load(allocator, &model_road_tsplit_glb);
     try model_tiles[12].load(allocator, &model_road_junction_glb);
+    try model_car_small.load(allocator, &model_car_small_glb);
 }
