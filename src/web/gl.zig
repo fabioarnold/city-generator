@@ -240,6 +240,7 @@ pub extern fn glGetUniformLocation(program: GLuint, name: [*c]const GLchar) call
 pub extern fn glUseProgram(program: GLuint) callconv(.c) void;
 pub extern fn glUniform1i(location: GLint, v0: GLint) callconv(.c) void;
 pub extern fn glUniform1f(location: GLint, v0: GLfloat) callconv(.c) void;
+pub extern fn glUniform2f(location: GLint, v0: GLfloat, v1: GLfloat) callconv(.c) void;
 pub extern fn glUniform3f(location: GLint, v0: GLfloat, v1: GLfloat, v2: GLfloat) callconv(.c) void;
 pub extern fn glUniform4f(location: GLint, v0: GLfloat, v1: GLfloat, v2: GLfloat, v3: GLfloat) callconv(.c) void;
 pub extern fn glUniform1fv(location: GLint, count: GLsizei, value: [*c]const GLfloat) callconv(.c) void;

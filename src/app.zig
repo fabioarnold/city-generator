@@ -246,7 +246,8 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
         {
             const width: u16 = @intFromFloat(video_scale * video_width);
             const height: u16 = @intFromFloat(video_scale * video_height);
-            gbuffer.resize(width / 8, height / 8);
+            // gbuffer.resize(width / 8, height / 8);
+            gbuffer.resize(width, height);
 
             gbuffer.begin();
             gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -267,6 +268,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
         gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_depth);
         gl.ActiveTexture(gl.TEXTURE0);
         gl.UseProgram(shaders.cavity.program);
+        gl.Uniform2f(shaders.cavity.u_pixel, video_scale / f32_i(gbuffer.width), video_scale / f32_i(gbuffer.height));
         primitives.quad();
     }
 

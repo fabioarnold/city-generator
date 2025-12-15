@@ -123,6 +123,7 @@ const glUniform1fv = (locationId, count, value) => {
   let arr = new Float32Array(memory.buffer, value, count);
   gl.uniform1fv(glUniformLocations[locationId], arr);
 }
+const glUniform2f = (locationId, x, y) => gl.uniform2f(glUniformLocations[locationId], x, y);
 const glUniform2fv = (locationId, count, value) => {
   let arr = new Float32Array(memory.buffer, value, count * 2);
   gl.uniform2fv(glUniformLocations[locationId], arr);
@@ -415,6 +416,7 @@ const webgl_env = {
   glUniform1i,
   glUniform1f,
   glUniform1fv,
+  glUniform2f,
   glUniform2fv,
   glUniform3f,
   glUniform3fv,
