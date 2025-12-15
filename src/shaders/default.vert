@@ -10,7 +10,8 @@ out vec3 v_normal;
 out vec2 v_texcoords;
 
 void main() {
-    v_normal = a_normal;
+    mat4 viewmodel = u_view * u_model;
+    v_normal = (viewmodel * vec4(a_normal, 0.0)).xyz;
     v_texcoords = a_texcoords;
     gl_Position = u_projection * u_view * u_model * vec4(a_position, 1.0);
 }

@@ -41,4 +41,6 @@ void main() {
 
     out_color = texture(u_colormap, v_uv);
     out_color.rgb += 0.25 * curvature;
+
+    // out_color.rgb = texture(u_normalmap, v_uv).rgb;
 }
