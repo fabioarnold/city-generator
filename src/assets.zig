@@ -17,7 +17,7 @@ const model_road_junction_glb align(4) = @embedFile("models/road_junction.glb").
 const model_car_small_glb align(4) = @embedFile("models/car_small.glb").*;
 
 pub var model_tiles: [13]Model = undefined;
-pub var model_car_small:Model = undefined;
+pub var model_car_small: Model = undefined;
 
 pub fn load(allocator: std.mem.Allocator) !void {
     try model_tiles[0].load(allocator, &model_building_a_glb);
