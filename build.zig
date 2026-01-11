@@ -44,6 +44,7 @@ fn build_wasm(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
 
 fn build_native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !void {
     const sdl3 = b.dependency("sdl3", .{ .target = target, .optimize = optimize });
+    const zgltf = b.dependency("zgltf", .{ .target = target, .optimize = optimize });
     const gl_bindings = @import("zigglgen").generateBindingsModule(b, .{
         .api = .gl,
         .version = .@"4.1",
@@ -60,6 +61,7 @@ fn build_native(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
             .imports = &.{
                 .{ .name = "sdl3", .module = sdl3.module("sdl3") },
                 .{ .name = "gl", .module = gl_bindings },
+                .{ .name = "zgltf", .module = zgltf.module("zgltf") },
             },
         }),
     });

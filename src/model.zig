@@ -1,11 +1,13 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const builtin = @import("builtin");
 const Gltf = @import("zgltf").Gltf;
 const la = @import("linear_algebra.zig");
 const vec3 = la.vec3;
 const quat = la.vec4;
 const mat4 = la.mat4;
-const gl = @import("web/gl.zig");
+const gl = @import("gl");
+const web_gl = @import("web/gl.zig");
 const shaders = @import("shaders.zig");
 
 const Model = @This();
@@ -37,14 +39,14 @@ pub const Transform = struct {
 };
 
 pub const ShaderInfo = struct {
-    model_loc: gl.GLint,
-    joints_loc: gl.GLint = 0,
-    blend_skin_loc: ?gl.GLint = null,
+    model_loc: gl.int,
+    joints_loc: gl.int = 0,
+    blend_skin_loc: ?gl.int = null,
 };
 
 gltf: Gltf,
-buffer_objects: []gl.GLuint,
-textures: []gl.GLuint,
+buffer_objects: []gl.uint,
+textures: []gl.uint,
 
 pub fn load(self: *Model, allocator: std.mem.Allocator, data: []align(4) const u8) !void {
     self.gltf = Gltf.init(allocator);
@@ -52,19 +54,19 @@ pub fn load(self: *Model, allocator: std.mem.Allocator, data: []align(4) const u
     const binary = self.gltf.glb_binary.?;
 
     // load buffers
-    self.buffer_objects = try allocator.alloc(gl.GLuint, self.gltf.data.buffer_views.len);
-    gl.glGenBuffers(@intCast(self.buffer_objects.len), self.buffer_objects.ptr);
+    self.buffer_objects = try allocator.alloc(gl.uint, self.gltf.data.buffer_views.len);
+    gl.GenBuffers(@intCast(self.buffer_objects.len), self.buffer_objects.ptr);
     for (self.gltf.data.buffer_views, self.buffer_objects) |buffer_view, buffer_object| {
         if (buffer_view.target) |target| {
-            gl.glBindBuffer(@intFromEnum(target), buffer_object);
-            gl.glBufferData(@intFromEnum(target), @intCast(buffer_view.byte_length), binary.ptr + buffer_view.byte_offset, gl.GL_STATIC_DRAW);
+            gl.BindBuffer(@intCast(@intFromEnum(target)), buffer_object);
+            gl.BufferData(@intCast(@intFromEnum(target)), @intCast(buffer_view.byte_length), binary.ptr + buffer_view.byte_offset, gl.STATIC_DRAW);
         }
     }
 
     // load textures
-    self.textures = try allocator.alloc(gl.GLuint, self.gltf.data.textures.len);
+    self.textures = try allocator.alloc(gl.uint, self.gltf.data.textures.len);
     if (self.textures.len > 0) {
-        gl.glGenTextures(@intCast(self.textures.len), self.textures.ptr);
+        gl.GenTextures(@intCast(self.textures.len), self.textures.ptr);
         for (self.gltf.data.textures, 0..) |texture, i| {
             const source = blk: {
                 if (texture.extensions.EXT_texture_webp) |webp| {
@@ -75,16 +77,21 @@ pub fn load(self: *Model, allocator: std.mem.Allocator, data: []align(4) const u
             const image = self.gltf.data.images[source];
             const mime = image.mime_type.?;
             const sampler = self.gltf.data.samplers[texture.sampler.?]; // TODO set filter, wrap
-            self.textures[i] = gl.loadTextureIMG(
-                image.data.?,
-                mime,
-                null,
-                null,
-                @intCast(@intFromEnum(sampler.min_filter orelse .linear)),
-                @intCast(@intFromEnum(sampler.mag_filter orelse .linear)),
-                @intCast(@intFromEnum(sampler.wrap_s)),
-                @intCast(@intFromEnum(sampler.wrap_t)),
-            );
+            
+            if (builtin.cpu.arch.isWasm()) {
+                self.textures[i] = web_gl.loadTextureIMG(
+                    image.data.?,
+                    mime,
+                    null,
+                    null,
+                    @intCast(@intFromEnum(sampler.min_filter orelse .linear)),
+                    @intCast(@intFromEnum(sampler.mag_filter orelse .linear)),
+                    @intCast(@intFromEnum(sampler.wrap_s)),
+                    @intCast(@intFromEnum(sampler.wrap_t)),
+                );
+            } else {
+                self.textures[i] = 0;
+            }
         }
     }
 }
@@ -128,15 +135,14 @@ pub fn access(comptime T: type, data: []const f32, i: usize) T {
 fn bindVertexAttrib(self: Model, accessor_index: usize, attrib_index: usize) void {
     const accessor = self.gltf.data.accessors[accessor_index];
     const buffer_view = self.gltf.data.buffer_views[accessor.buffer_view.?];
-    gl.glBindBuffer(@intFromEnum(buffer_view.target.?), self.buffer_objects[accessor.buffer_view.?]);
-    const size: gl.GLint = @intCast(accessor.type.componentCount());
-    const typ: gl.GLenum = @intFromEnum(accessor.component_type);
-    const normalized: gl.GLboolean = @intFromBool(accessor.normalized);
+    gl.BindBuffer(@intCast(@intFromEnum(buffer_view.target.?)), self.buffer_objects[accessor.buffer_view.?]);
+    const size: gl.int = @intCast(accessor.type.componentCount());
+    const typ: gl.uint = @intFromEnum(accessor.component_type);
+    const normalized: u8 = @intFromBool(accessor.normalized);
     const byte_size: usize = accessor.type.componentCount() * accessor.component_type.byteSize();
-    const stride: gl.GLsizei = @intCast(if (buffer_view.byte_stride) |byte_stride| byte_stride else byte_size);
-    const pointer: ?*const anyopaque = @ptrFromInt(accessor.byte_offset);
-    gl.glEnableVertexAttribArray(attrib_index);
-    gl.glVertexAttribPointer(attrib_index, size, typ, normalized, stride, pointer);
+    const stride: gl.sizei = @intCast(if (buffer_view.byte_stride) |byte_stride| byte_stride else byte_size);
+    gl.EnableVertexAttribArray(@intCast(attrib_index));
+    gl.VertexAttribPointer(@intCast(attrib_index), size, typ, normalized, stride, @intCast(accessor.byte_offset));
 }
 
 pub fn drawWithTransforms(self: *Model, si: ShaderInfo, model_mat: mat4, global_transforms: []const mat4) void {
@@ -154,21 +160,21 @@ pub fn drawWithTransforms(self: *Model, si: ShaderInfo, model_mat: mat4, global_
                 const inverse_bind_matrix = access(mat4, inverse_bind_matrices, i);
                 joints[i] = la.mul(global_transforms[joint_index], inverse_bind_matrix);
             }
-            gl.glUniformMatrix4fv(si.joints_loc, @intCast(skin.joints.len), gl.GL_FALSE, @ptrCast(&joints));
-            if (si.blend_skin_loc) |blend_skin| gl.glUniform1f(blend_skin, 1);
-            gl.glUniformMatrix4fv(si.model_loc, 1, gl.GL_FALSE, @ptrCast(&model_mat));
+            gl.UniformMatrix4fv(si.joints_loc, @intCast(skin.joints.len), 0, @ptrCast(&joints));
+            if (si.blend_skin_loc) |blend_skin| gl.Uniform1f(blend_skin, 1);
+            gl.UniformMatrix4fv(si.model_loc, 1, 0, @ptrCast(&model_mat));
         } else {
             const model = la.mul(model_mat, global_transforms[node_i]);
-            gl.glUniformMatrix4fv(si.model_loc, 1, gl.GL_FALSE, @ptrCast(&model));
+            gl.UniformMatrix4fv(si.model_loc, 1, 0, @ptrCast(&model));
         }
-        defer if (si.blend_skin_loc) |blend_skin| gl.glUniform1f(blend_skin, 0);
+        defer if (si.blend_skin_loc) |blend_skin| gl.Uniform1f(blend_skin, 0);
 
         for (mesh.primitives) |*primitive| {
             if (primitive.material) |material_index| {
                 const material = data.materials[material_index];
 
                 if (material.metallic_roughness.base_color_texture) |base_color| {
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, self.textures[base_color.index]);
+                    gl.BindTexture(gl.TEXTURE_2D, self.textures[base_color.index]);
                 }
             }
             for (primitive.attributes) |attribute| {
@@ -183,20 +189,20 @@ pub fn drawWithTransforms(self: *Model, si: ShaderInfo, model_mat: mat4, global_
             }
             defer for (primitive.attributes) |attribute| {
                 switch (attribute) {
-                    .position => gl.glDisableVertexAttribArray(0),
-                    .normal => gl.glDisableVertexAttribArray(1),
-                    .texcoord => gl.glDisableVertexAttribArray(2),
-                    .joints => gl.glDisableVertexAttribArray(3),
-                    .weights => gl.glDisableVertexAttribArray(4),
+                    .position => gl.DisableVertexAttribArray(0),
+                    .normal => gl.DisableVertexAttribArray(1),
+                    .texcoord => gl.DisableVertexAttribArray(2),
+                    .joints => gl.DisableVertexAttribArray(3),
+                    .weights => gl.DisableVertexAttribArray(4),
                     else => {},
                 }
             };
             const accessor_index = primitive.indices.?;
             const accessor = data.accessors[accessor_index];
             const buffer_view = data.buffer_views[accessor.buffer_view.?];
-            gl.glBindBuffer(@intFromEnum(buffer_view.target.?), self.buffer_objects[accessor.buffer_view.?]);
+            gl.BindBuffer(@intCast(@intFromEnum(buffer_view.target.?)), self.buffer_objects[accessor.buffer_view.?]);
 
-            gl.glDrawElements(@intFromEnum(primitive.mode), @intCast(accessor.count), @intFromEnum(accessor.component_type), accessor.byte_offset);
+            gl.DrawElements(@intCast(@intFromEnum(primitive.mode)), @intCast(accessor.count), @intCast(@intFromEnum(accessor.component_type)), accessor.byte_offset);
         }
     }
 }
