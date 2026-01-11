@@ -22,6 +22,9 @@ pub var video_width: f32 = 1280;
 pub var video_height: f32 = 720;
 pub var video_scale: f32 = 1;
 
+const color_green_dark = vec3{ 0.34, 0.43, 0.14 };
+const color_green_light = vec3{ 0.69, 0.78, 0.26 };
+
 const Camera = struct {
     position: vec3 = @splat(0),
     phi: f32 = 0, // azimuth angle in degrees
@@ -70,10 +73,12 @@ fn read_tilemap(reader: std.io.AnyReader) !void {
 
 var gbuffer: GBuffer = undefined;
 
-const box_x = 32;
-var box_y: f32 = 200;
-const box_w = 184 + 12;
-const box_h = 400;
+var box = gfx.Rect{
+    .x = 32,
+    .y = 200,
+    .w = 184 + 12,
+    .h = 400,
+};
 
 var current_tile: Tile = .{ .index = 0, .rot = 0 };
 
@@ -97,7 +102,9 @@ pub fn init(arena: std.mem.Allocator) !void {
     try shaders.load();
     debug_draw.init();
     primitives.init();
-    gfx.init(arena);
+    try gfx.init(arena);
+    _ = try gfx.add_font(arena, @embedFile("fonts/Tomorrow-Medium.ttf"));
+    _ = try gfx.add_font(arena, @embedFile("fonts/JetBrainsMono-Regular.ttf"));
 
     camera.position = .{ 0, 1, 0.7 };
     camera.phi = 60;
@@ -203,7 +210,7 @@ fn update() void {
     camera.theta = std.math.clamp(camera.theta, -89, 89);
     camera.position += la.vec3_from_vec4(la.mul_vector(la.rotation(-camera.phi, .{ 0, 0, 1 }), move));
 
-    box_y = video_height / 2 - box_h / 2;
+    box.y = video_height / 2 - box.h / 2;
 
     if (input.key_down(.r) and !key_down_r) {
         current_tile.rot +%= 1;
@@ -244,7 +251,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
         break :blk origin + @as(vec3, @splat(t)) * dir;
     };
 
-    const tilepicker_hover = math.point_in_rect(input.mx, input.my, box_x, box_y, box_w, box_h);
+    const tilepicker_hover = math.point_in_rect(input.mx, input.my, box.x, box.y, box.w, box.h);
     if (input.down and !tilepicker_hover) {
         const x: i32 = @intFromFloat(@round(cursor_pos[0] - 0.5));
         const y: i32 = @intFromFloat(@round(cursor_pos[1] - 0.5));
@@ -337,28 +344,20 @@ fn draw_tilepicker(frame_arena: std.mem.Allocator, projection: mat4) !void {
     gfx.begin(&projection, &la.identity());
 
     var box_path = try gfx.Path.init(frame_arena, 100);
-    box_path.rect_rounded(box_x, box_y, box_w, box_h, 4);
+    box_path.rect_rounded(box, 4);
     gfx.set_color(.{ 0.93, 0.91, 0.9, 1 });
-    try gfx.fill_path(&box_path);
+    gfx.fill_path(&box_path);
     gfx.set_color(.{ 0.3, 0.3, 0.3, 1 });
     gfx.set_stroke_width(2);
-    try gfx.stroke_path(&box_path);
+    gfx.stroke_path(&box_path);
 
-    gfx.transform(&la.mul(la.translation(box_x + 7, box_y, 0), la.scale(2, 2, 1)));
-    gfx.set_color(.{ 0.3, 0.3, 0.3, 1 });
+    gfx.set_color(.{ 0, 0, 0, 1 });
     var text_rot: [6]u8 = "rot: 0".*;
     text_rot[5] += current_tile.rot;
-    gfx.draw_text(&text_rot, 8, 20);
-
-    gfx.draw_text("TILE PICKER", 7, 7);
-    gfx.draw_text("TILE PICKER", 7, 8);
-    gfx.draw_text("TILE PICKER", 7, 9);
-    gfx.draw_text("TILE PICKER", 9, 7);
-    gfx.draw_text("TILE PICKER", 9, 8);
-    gfx.draw_text("TILE PICKER", 9, 9);
-    gfx.set_color(.{ 1, 1, 1, 1 });
-    gfx.draw_text("TILE PICKER", 8, 8);
-    gfx.transform(&la.identity());
+    gfx.set_font_id(0);
+    gfx.set_font_size(16);
+    gfx.draw_text("TILE PICKER", box.x + 8, box.y + 8);
+    gfx.draw_text(&text_rot, box.x + 8, box.y + 32);
 
     if (true) {
         gl.Enable(gl.DEPTH_TEST);
@@ -379,8 +378,8 @@ fn draw_tilepicker(frame_arena: std.mem.Allocator, projection: mat4) !void {
         const ncols = 3;
         const pad = 28;
         for (assets.model_tiles[0..], 0..) |*tile, i| {
-            const x: f32 = box_x + f32_i(i % ncols) * (tile_width) + pad;
-            var y: f32 = box_y + 64 + f32_i(i / ncols) * (tile_height + pad) + pad;
+            const x: f32 = box.x + f32_i(i % ncols) * (tile_width) + pad;
+            var y: f32 = box.y + 64 + f32_i(i / ncols) * (tile_height + pad) + pad;
             if ((i % ncols) == 1) y += (tile_height + pad) / 2;
             const hover = math.point_in_rect(input.mx, input.my, x, y, tile_width, tile_width);
             const scale: f32 = if (hover) 0.6 else 0.5;

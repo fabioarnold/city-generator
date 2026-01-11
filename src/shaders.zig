@@ -21,7 +21,16 @@ pub const gfx_shader = struct {
     pub var u_view: gl.int = undefined;
     pub var u_model: gl.int = undefined;
     pub var u_color: gl.int = undefined;
-    pub var u_colormap_enabled: gl.int = undefined;
+    pub var u_colormap_type: gl.int = undefined;
+    pub var u_src_rect: gl.int = undefined;
+    pub var u_gradient_colors: gl.int = undefined;
+    pub var u_gradient_stops: gl.int = undefined;
+    pub var u_gradient_count: gl.int = undefined;
+    pub var u_gradient_xform: gl.int = undefined;
+    pub var u_gradient_extents: gl.int = undefined;
+    pub var u_gradient_radius: gl.int = undefined;
+    pub var u_gradient_feather: gl.int = undefined;
+    pub var u_gradient_smooth: gl.int = undefined;
 };
 
 pub const tile_shader = struct {
@@ -63,9 +72,20 @@ pub fn load() !void {
         gfx_shader.u_projection = gl.GetUniformLocation(gfx_shader.program, "u_projection");
         gfx_shader.u_view = gl.GetUniformLocation(gfx_shader.program, "u_view");
         gfx_shader.u_model = gl.GetUniformLocation(gfx_shader.program, "u_model");
-        gl.Uniform1i(gl.GetUniformLocation(gfx_shader.program, "u_colormap"), 0);
         gfx_shader.u_color = gl.GetUniformLocation(gfx_shader.program, "u_color");
-        gfx_shader.u_colormap_enabled = gl.GetUniformLocation(gfx_shader.program, "u_colormap_enabled");
+        gfx_shader.u_colormap_type = gl.GetUniformLocation(gfx_shader.program, "u_colormap_type");
+        const u_colormap = gl.GetUniformLocation(gfx_shader.program, "u_colormap");
+        gl.Uniform1i(u_colormap, 0);
+        gfx_shader.u_src_rect = gl.GetUniformLocation(gfx_shader.program, "u_src_rect");
+
+        gfx_shader.u_gradient_colors = gl.GetUniformLocation(gfx_shader.program, "u_gradient_colors");
+        gfx_shader.u_gradient_stops = gl.GetUniformLocation(gfx_shader.program, "u_gradient_stops");
+        gfx_shader.u_gradient_count = gl.GetUniformLocation(gfx_shader.program, "u_gradient_count");
+        gfx_shader.u_gradient_xform = gl.GetUniformLocation(gfx_shader.program, "u_gradient_xform");
+        gfx_shader.u_gradient_extents = gl.GetUniformLocation(gfx_shader.program, "u_gradient_extents");
+        gfx_shader.u_gradient_radius = gl.GetUniformLocation(gfx_shader.program, "u_gradient_radius");
+        gfx_shader.u_gradient_feather = gl.GetUniformLocation(gfx_shader.program, "u_gradient_feather");
+        gfx_shader.u_gradient_smooth = gl.GetUniformLocation(gfx_shader.program, "u_gradient_smooth");
     }
     {
         default.program = try load_shader(@embedFile("shaders/default.vert"), @embedFile("shaders/default.frag"));
@@ -100,6 +120,7 @@ fn load_shader(vertex_shader_source: []const u8, fragment_shader_source: []const
 
     const preamble = if (gl.info.api == .gles)
         \\#version 300 es
+        \\precision highp int;
         \\precision highp float;
         \\
     else
