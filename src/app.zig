@@ -38,11 +38,35 @@ const Camera = struct {
 };
 var camera: Camera = .{};
 
+const LocationKey = packed struct(u32) { x: u16, y: u16 };
 const Tile = packed struct(u8) {
     index: u6,
     rot: u2,
 };
-var tilemap: [8][8]Tile = undefined;
+const TileChunk = [8][8]Tile;
+var tilemap: std.AutoHashMap(LocationKey, TileChunk) = undefined;
+
+fn write_tilemap(writer: std.array_list.Managed(u8).Writer) !void {
+    // var out = std.array_list.Managed(u8).init(allocator);
+    // var writer = out.writer();
+    try writer.writeInt(u32, tilemap.count(), .little);
+    var it = tilemap.iterator();
+    while (it.next()) |entry| {
+        try writer.writeStructEndian(entry.key_ptr.*, .little);
+        try writer.writeStructEndian(entry.value_ptr.*, .little);
+    }
+}
+
+fn read_tilemap(reader: std.io.AnyReader) !void {
+    tilemap.clearAndFree();
+
+    const count = try reader.readInt(u32, .little);
+    for (0..count) |_| {
+        const location = try reader.readStructEndian(LocationKey, .little);
+        const chunk = try reader.readStructEndian(TileChunk, .little);
+        try tilemap.put(location, chunk);
+    }
+}
 
 var gbuffer: GBuffer = undefined;
 
@@ -149,11 +173,14 @@ pub fn init(arena: std.mem.Allocator) !void {
         .{ .index = 10, .rot = 3 },
     };
 
-    for (&tilemap, 0..) |*row, y| {
+    var tilechunk: TileChunk = undefined;
+    for (&tilechunk, 0..) |*row, y| {
         for (&row.*, 0..) |*tile, x| {
             tile.* = tiles[8 * y + x];
         }
     }
+    tilemap = std.AutoHashMap(LocationKey, TileChunk).init(arena);
+    try tilemap.put(.{ .x = 0, .y = 0 }, tilechunk);
 }
 
 var key_down_r: bool = false;
@@ -183,18 +210,7 @@ fn update() void {
     }
     key_down_r = input.key_down(.r);
 
-    if (input.key_down(.x) and !key_down_x) {
-        dump_tilemap();
-    }
     key_down_x = input.key_down(.x);
-}
-
-fn dump_tilemap() void {
-    for (tilemap) |row| {
-        for (row) |tile| {
-            log.info("{any},", .{tile});
-        }
-    }
 }
 
 pub fn draw(frame_arena: std.mem.Allocator) void {
@@ -232,10 +248,10 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
     if (input.down and !tilepicker_hover) {
         const x: i32 = @intFromFloat(@round(cursor_pos[0] - 0.5));
         const y: i32 = @intFromFloat(@round(cursor_pos[1] - 0.5));
-        if (x >= 0 and x < tilemap[0].len and y >= 0 and y < tilemap.len) {
+        if (x >= 0 and x < 8 and y >= 0 and y < 8) {
             const row: usize = @intCast(y);
             const col: usize = @intCast(x);
-            tilemap[row][col] = current_tile;
+            tilemap.getPtr(.{ .x = 0, .y = 0 }).?[row][col] = current_tile;
         }
     }
 
@@ -295,7 +311,8 @@ fn draw_map(projection: mat4, view: mat4) void {
     gl.UniformMatrix4fv(shaders.default.u_view, 1, gl.FALSE, @ptrCast(&view));
     const si: Model.ShaderInfo = .{ .model_loc = shaders.default.u_model };
 
-    for (tilemap, 0..) |row, y| {
+    const chunk = tilemap.getPtr(.{ .x = 0, .y = 0 }).?;
+    for (chunk, 0..) |row, y| {
         for (row, 0..) |tile, x| {
             if (tile.index > 0) {
                 const model = muln(&.{
