@@ -38,6 +38,10 @@ const debug_axle_point_z: f32 = 0.16;
 const debug_front_axle_point_size: f32 = 0.05;
 const debug_rear_axle_point_size: f32 = 0.04;
 const collision_substep_distance: f32 = 0.025;
+const small_distance_epsilon: f32 = 0.001;
+const small_length_epsilon: f32 = 0.0001;
+const small_angle_epsilon: f32 = 0.001;
+const debug_arc_segment_angle_step_rad: f32 = std.math.pi / 16.0;
 
 const Direction = enum(u2) {
     north = 0,
@@ -164,6 +168,20 @@ const AheadInfo = struct {
     other_index: usize,
 };
 
+const EdgeRef = struct {
+    edge: *const Edge,
+};
+
+const CarAdvanceState = struct {
+    route_edge_index: u32,
+    edge_t: f32,
+    rear_axle: vec2,
+    front_axle: vec2,
+    heading_rad: f32,
+    steering_angle_rad: f32,
+    initialized: bool,
+};
+
 pub const Simulation = struct {
     allocator: std.mem.Allocator,
     prng: std.Random.DefaultPrng,
@@ -281,32 +299,10 @@ pub const Simulation = struct {
         for (self.edges.items) |edge| {
             switch (edge.geometry) {
                 .line => |line| self.draw_debug_line(line.start, line.end),
-                .arc => |arc| {
-                    const step_count = @max(4, @as(u32, @intFromFloat(@ceil(@abs(arc.angle_delta) / (std.math.pi / 16.0)))));
-                    var step: u32 = 0;
-                    while (step < step_count) : (step += 1) {
-                        const t0 = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(step_count));
-                        const t1 = @as(f32, @floatFromInt(step + 1)) / @as(f32, @floatFromInt(step_count));
-                        const a0 = arc.start_angle + arc.angle_delta * t0;
-                        const a1 = arc.start_angle + arc.angle_delta * t1;
-                        const p0 = arc.center + vec2{ @cos(a0), @sin(a0) } * @as(vec2, @splat(arc.radius));
-                        const p1 = arc.center + vec2{ @cos(a1), @sin(a1) } * @as(vec2, @splat(arc.radius));
-                        self.draw_debug_line(p0, p1);
-                    }
-                },
+                .arc => |arc| self.draw_debug_arc(arc.center, arc.radius, arc.start_angle, arc.angle_delta),
                 .turn => |turn| {
                     self.draw_debug_line(turn.start, turn.entry);
-                    const step_count = @max(4, @as(u32, @intFromFloat(@ceil(@abs(turn.arc_angle_delta) / (std.math.pi / 16.0)))));
-                    var step: u32 = 0;
-                    while (step < step_count) : (step += 1) {
-                        const t0 = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(step_count));
-                        const t1 = @as(f32, @floatFromInt(step + 1)) / @as(f32, @floatFromInt(step_count));
-                        const a0 = turn.arc_start_angle + turn.arc_angle_delta * t0;
-                        const a1 = turn.arc_start_angle + turn.arc_angle_delta * t1;
-                        const p0 = turn.arc_center + vec2{ @cos(a0), @sin(a0) } * @as(vec2, @splat(turn.arc_radius));
-                        const p1 = turn.arc_center + vec2{ @cos(a1), @sin(a1) } * @as(vec2, @splat(turn.arc_radius));
-                        self.draw_debug_line(p0, p1);
-                    }
+                    self.draw_debug_arc(turn.arc_center, turn.arc_radius, turn.arc_start_angle, turn.arc_angle_delta);
                     self.draw_debug_line(turn.exit, turn.end);
                 },
             }
@@ -324,11 +320,31 @@ pub const Simulation = struct {
         self.draw_debug_line_width(start, end, debug_path_width);
     }
 
+    fn draw_debug_arc(
+        self: *const Simulation,
+        center: vec2,
+        radius: f32,
+        start_angle: f32,
+        angle_delta: f32,
+    ) void {
+        const step_count = arc_polyline_step_count(angle_delta);
+        var step: u32 = 0;
+        while (step < step_count) : (step += 1) {
+            const t0 = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(step_count));
+            const t1 = @as(f32, @floatFromInt(step + 1)) / @as(f32, @floatFromInt(step_count));
+            const a0 = start_angle + angle_delta * t0;
+            const a1 = start_angle + angle_delta * t1;
+            const p0 = center + vec2{ @cos(a0), @sin(a0) } * @as(vec2, @splat(radius));
+            const p1 = center + vec2{ @cos(a1), @sin(a1) } * @as(vec2, @splat(radius));
+            self.draw_debug_line(p0, p1);
+        }
+    }
+
     fn draw_debug_line_width(self: *const Simulation, start: vec2, end: vec2, width: f32) void {
         _ = self;
         const delta = end - start;
         const length = vector_length(delta);
-        if (length < 0.001) return;
+        if (length < small_distance_epsilon) return;
 
         const yaw_deg = std.math.radiansToDegrees(std.math.atan2(delta[1], delta[0]));
         const model = la.muln(&.{
@@ -377,6 +393,15 @@ pub const Simulation = struct {
 
     fn car_length_world(self: *const Simulation, model_kind: usize) f32 {
         return 2.0 * self.car_half_length_world(model_kind);
+    }
+
+    fn route_edge_ref(self: *const Simulation, car: *const Car, relative_index: usize) ?EdgeRef {
+        const base_index: usize = @intCast(car.route_edge_index);
+        const route_index = base_index + relative_index;
+        if (route_index >= car.route_edges.items.len) return null;
+
+        const edge_id = car.route_edges.items[route_index];
+        return .{ .edge = &self.edges.items[@intCast(edge_id)] };
     }
 
     fn clear_cars(self: *Simulation) void {
@@ -517,7 +542,7 @@ pub const Simulation = struct {
             }
         }
 
-        if (edge.length < 0.001) return;
+        if (edge.length < small_distance_epsilon) return;
         try self.edges.append(self.allocator, edge);
     }
 
@@ -535,7 +560,7 @@ pub const Simulation = struct {
         const start = self.nodes.items[from_node].position;
         const end = self.nodes.items[to_node].position;
         const length = vector_length(end - start);
-        if (length < 0.001) return;
+        if (length < small_distance_epsilon) return;
 
         try self.edges.append(self.allocator, .{
             .from = from_node,
@@ -817,27 +842,15 @@ pub const Simulation = struct {
 
         while (remaining > 0) {
             const step_distance = @min(remaining, collision_substep_distance);
-            var car = &self.cars.items[@intCast(car_index)];
+            const car = &self.cars.items[@intCast(car_index)];
 
-            const previous_edge_index = car.route_edge_index;
-            const previous_t = car.edge_t;
-            const previous_rear = car.rear_axle;
-            const previous_front = car.front_axle;
-            const previous_heading = car.heading_rad;
-            const previous_steer = car.steering_angle_rad;
-            const previous_initialized = car.initialized;
+            const previous = snapshot_car_state(car);
 
             self.advance_car(car, step_distance);
             self.update_car_pose(car);
 
             if (self.car_overlaps_any(car_index)) {
-                car.route_edge_index = previous_edge_index;
-                car.edge_t = previous_t;
-                car.rear_axle = previous_rear;
-                car.front_axle = previous_front;
-                car.heading_rad = previous_heading;
-                car.steering_angle_rad = previous_steer;
-                car.initialized = previous_initialized;
+                restore_car_state(car, previous);
                 break;
             }
 
@@ -849,6 +862,28 @@ pub const Simulation = struct {
         return moved_total;
     }
 
+    fn snapshot_car_state(car: *const Car) CarAdvanceState {
+        return .{
+            .route_edge_index = car.route_edge_index,
+            .edge_t = car.edge_t,
+            .rear_axle = car.rear_axle,
+            .front_axle = car.front_axle,
+            .heading_rad = car.heading_rad,
+            .steering_angle_rad = car.steering_angle_rad,
+            .initialized = car.initialized,
+        };
+    }
+
+    fn restore_car_state(car: *Car, state: CarAdvanceState) void {
+        car.route_edge_index = state.route_edge_index;
+        car.edge_t = state.edge_t;
+        car.rear_axle = state.rear_axle;
+        car.front_axle = state.front_axle;
+        car.heading_rad = state.heading_rad;
+        car.steering_angle_rad = state.steering_angle_rad;
+        car.initialized = state.initialized;
+    }
+
     fn car_arrive(self: *Simulation, car: *Car) void {
         car.at_node = car.destination_node;
         car.velocity_units_s = 0;
@@ -857,13 +892,10 @@ pub const Simulation = struct {
     }
 
     fn limit_move_for_traffic_light(self: *const Simulation, car: *const Car, move_distance: f32) f32 {
-        if (car.route_edge_index >= car.route_edges.items.len) return 0;
-        if (car.route_edge_index + 1 >= car.route_edges.items.len) return move_distance;
-
-        const current_edge_id = car.route_edges.items[@intCast(car.route_edge_index)];
-        const next_edge_id = car.route_edges.items[@intCast(car.route_edge_index + 1)];
-        const current_edge = self.edges.items[@intCast(current_edge_id)];
-        const next_edge = self.edges.items[@intCast(next_edge_id)];
+        const current = self.route_edge_ref(car, 0) orelse return 0;
+        const next = self.route_edge_ref(car, 1) orelse return move_distance;
+        const current_edge = current.edge.*;
+        const next_edge = next.edge.*;
 
         if (next_edge.edge_type != .transition) return move_distance;
         if (!self.has_light_at(next_edge.to_tile_x, next_edge.to_tile_y)) return move_distance;
@@ -880,11 +912,12 @@ pub const Simulation = struct {
 
     fn limit_move_for_car_ahead(self: *const Simulation, car_index: u32, move_distance: f32) f32 {
         var allowed = move_distance;
-        const car = self.cars.items[@intCast(car_index)];
-        if (car.route_edge_index >= car.route_edges.items.len) return allowed;
+        const car_index_usize: usize = @intCast(car_index);
+        const car = self.cars.items[car_index_usize];
+        if (self.route_edge_ref(&car, 0) == null) return allowed;
 
         for (self.cars.items, 0..) |other, other_index| {
-            if (other_index == car_index) continue;
+            if (other_index == car_index_usize) continue;
             if (other.route_edge_index >= other.route_edges.items.len) continue;
             const distance_ahead = self.route_distance_to_other_ahead(&car, &other) orelse continue;
             const desired_gap = self.desired_follow_gap(&car, &other);
@@ -897,12 +930,13 @@ pub const Simulation = struct {
     }
 
     fn predictive_speed_cap_for_car_ahead(self: *const Simulation, car_index: u32) f32 {
-        const car = self.cars.items[@intCast(car_index)];
-        if (car.route_edge_index >= car.route_edges.items.len) return car.speed_units_s;
+        const car_index_usize: usize = @intCast(car_index);
+        const car = self.cars.items[car_index_usize];
+        if (self.route_edge_ref(&car, 0) == null) return car.speed_units_s;
 
         var speed_cap = car.speed_units_s;
         for (self.cars.items, 0..) |other, other_index| {
-            if (other_index == car_index) continue;
+            if (other_index == car_index_usize) continue;
             if (other.route_edge_index >= other.route_edges.items.len) continue;
 
             const distance_ahead = self.route_distance_to_other_ahead(&car, &other) orelse continue;
@@ -930,13 +964,10 @@ pub const Simulation = struct {
     }
 
     fn intersection_entry_allowed(self: *const Simulation, car: *const Car) bool {
-        if (car.route_edge_index >= car.route_edges.items.len) return false;
-        if (car.route_edge_index + 1 >= car.route_edges.items.len) return true;
-
-        const current_edge_id = car.route_edges.items[@intCast(car.route_edge_index)];
-        const current_edge = self.edges.items[@intCast(current_edge_id)];
-        const next_edge_id = car.route_edges.items[@intCast(car.route_edge_index + 1)];
-        const next_edge = self.edges.items[@intCast(next_edge_id)];
+        const current = self.route_edge_ref(car, 0) orelse return false;
+        const next = self.route_edge_ref(car, 1) orelse return true;
+        const current_edge = current.edge.*;
+        const next_edge = next.edge.*;
         if (next_edge.edge_type != .transition) return true;
         if (!self.has_light_at(next_edge.to_tile_x, next_edge.to_tile_y)) return true;
         if (self.intersection_has_cars_inside(
@@ -982,9 +1013,8 @@ pub const Simulation = struct {
         tile_x: i32,
         tile_y: i32,
     ) bool {
-        if (car.route_edge_index >= car.route_edges.items.len) return false;
-        const edge_id = car.route_edges.items[@intCast(car.route_edge_index)];
-        const edge = self.edges.items[@intCast(edge_id)];
+        const edge_ref = self.route_edge_ref(car, 0) orelse return false;
+        const edge = edge_ref.edge.*;
         return switch (edge.edge_type) {
             .in_tile => edge.tile_x == tile_x and edge.tile_y == tile_y,
             .transition => blk: {
@@ -1017,12 +1047,13 @@ pub const Simulation = struct {
         car_index: u32,
         velocity_limit: f32,
     ) f32 {
-        const car = self.cars.items[@intCast(car_index)];
-        if (car.route_edge_index >= car.route_edges.items.len) return 0;
+        const car_index_usize: usize = @intCast(car_index);
+        const car = self.cars.items[car_index_usize];
+        if (self.route_edge_ref(&car, 0) == null) return 0;
 
         var speed_cap = velocity_limit;
         for (self.cars.items, 0..) |other, other_index| {
-            if (other_index == car_index) continue;
+            if (other_index == car_index_usize) continue;
             if (other.route_edge_index >= other.route_edges.items.len and other.wait_timer_s <= 0) continue;
 
             if (!self.future_obb_overlap_for_speed(&car, &other, speed_cap)) continue;
@@ -1040,7 +1071,7 @@ pub const Simulation = struct {
             }
 
             speed_cap = @min(speed_cap, low);
-            if (speed_cap <= 0.001) return 0;
+            if (speed_cap <= small_distance_epsilon) return 0;
         }
 
         return speed_cap;
@@ -1135,7 +1166,7 @@ pub const Simulation = struct {
         while (remaining > 0 and car.route_edge_index < car.route_edges.items.len) {
             const edge_id = car.route_edges.items[@intCast(car.route_edge_index)];
             const edge = self.edges.items[@intCast(edge_id)];
-            if (edge.length < 0.001) {
+            if (edge.length < small_distance_epsilon) {
                 car.route_edge_index += 1;
                 car.edge_t = 0;
                 continue;
@@ -1174,7 +1205,7 @@ pub const Simulation = struct {
             car.initialized = true;
         } else {
             const front_to_rear = car.front_axle - car.rear_axle;
-            if (vector_length(front_to_rear) < 0.0001) {
+            if (vector_length(front_to_rear) < small_length_epsilon) {
                 car.rear_axle = car.front_axle - sample.tangent * @as(vec2, @splat(wheelbase));
             } else {
                 const follow_direction = vector_normalize(front_to_rear);
@@ -1280,7 +1311,7 @@ fn build_turn_geometry(
 
     const delta = end - start;
     const determinant = heading_start[0] * heading_end[1] - heading_start[1] * heading_end[0];
-    if (@abs(determinant) < 0.0001) return null;
+    if (@abs(determinant) < small_length_epsilon) return null;
 
     const t0 = (delta[0] * heading_end[1] - delta[1] * heading_end[0]) / determinant;
     const t1 = (heading_start[0] * delta[1] - heading_start[1] * delta[0]) / determinant;
@@ -1288,9 +1319,9 @@ fn build_turn_geometry(
     const intersection = start + heading_start * @as(vec2, @splat(t0));
 
     const turn_angle = std.math.acos(std.math.clamp(la.dot(vec2, heading_start, heading_end), -1, 1));
-    if (turn_angle < 0.001) return null;
+    if (turn_angle < small_angle_epsilon) return null;
     const tan_half = @tan(turn_angle * 0.5);
-    if (@abs(tan_half) < 0.0001) return null;
+    if (@abs(tan_half) < small_length_epsilon) return null;
 
     const d_target = radius_target * tan_half;
     const d_max = @min(t0 * 0.92, t1 * 0.92);
@@ -1313,7 +1344,7 @@ fn build_turn_geometry(
     const len_entry = vector_length(entry - start);
     const len_arc = @abs(angle_delta) * radius;
     const len_exit = vector_length(end - exit);
-    if (len_arc < 0.001) return null;
+    if (len_arc < small_distance_epsilon) return null;
 
     return .{
         .start = start,
@@ -1341,16 +1372,16 @@ fn build_turn_arc(start: vec2, end: vec2, heading_start: vec2, heading_end: vec2
 
     var radius_signed: f32 = 0;
     if (@abs(denominator[0]) > @abs(denominator[1])) {
-        if (@abs(denominator[0]) < 0.0001) return null;
+        if (@abs(denominator[0]) < small_length_epsilon) return null;
         radius_signed = delta[0] / denominator[0];
     } else {
-        if (@abs(denominator[1]) < 0.0001) return null;
+        if (@abs(denominator[1]) < small_length_epsilon) return null;
         radius_signed = delta[1] / denominator[1];
     }
 
     const center = start + n0 * @as(vec2, @splat(radius_signed));
     const radius = @abs(radius_signed);
-    if (radius < 0.001) return null;
+    if (radius < small_distance_epsilon) return null;
 
     const angle_start = std.math.atan2(start[1] - center[1], start[0] - center[0]);
     const angle_end = std.math.atan2(end[1] - center[1], end[0] - center[0]);
@@ -1373,13 +1404,17 @@ fn normalize_angle_pi(angle: f32) f32 {
     return normalized;
 }
 
+fn arc_polyline_step_count(angle_delta: f32) u32 {
+    return @max(4, @as(u32, @intFromFloat(@ceil(@abs(angle_delta) / debug_arc_segment_angle_step_rad))));
+}
+
 fn vector_length(vector: vec2) f32 {
     return @sqrt(vector[0] * vector[0] + vector[1] * vector[1]);
 }
 
 fn vector_normalize(vector: vec2) vec2 {
     const len = vector_length(vector);
-    if (len < 0.0001) return .{ 1, 0 };
+    if (len < small_length_epsilon) return .{ 1, 0 };
     return vector / @as(vec2, @splat(len));
 }
 
@@ -1390,6 +1425,28 @@ fn line_sample(start: vec2, end: vec2, t_input: f32) Sample {
         .position = start + (end - start) * @as(vec2, @splat(t)),
         .tangent = tangent,
         .curvature = 0,
+    };
+}
+
+fn arc_sample(
+    center: vec2,
+    radius: f32,
+    start_angle: f32,
+    angle_delta: f32,
+    t_input: f32,
+) Sample {
+    const t = std.math.clamp(t_input, 0, 1);
+    const angle = start_angle + angle_delta * t;
+    const radial = vec2{ @cos(angle), @sin(angle) };
+    const tangent = if (angle_delta >= 0)
+        vec2{ -radial[1], radial[0] }
+    else
+        vec2{ radial[1], -radial[0] };
+    const curvature_sign: f32 = if (angle_delta >= 0) 1 else -1;
+    return .{
+        .position = center + radial * @as(vec2, @splat(radius)),
+        .tangent = tangent,
+        .curvature = curvature_sign / radius,
     };
 }
 
@@ -1405,43 +1462,25 @@ fn edge_sample(edge: Edge, t_input: f32) Sample {
                 .curvature = 0,
             };
         },
-        .arc => |arc| blk: {
-            const angle = arc.start_angle + arc.angle_delta * t;
-            const radial = vec2{ @cos(angle), @sin(angle) };
-            const tangent = if (arc.angle_delta >= 0)
-                vec2{ -radial[1], radial[0] }
-            else
-                vec2{ radial[1], -radial[0] };
-            const curvature_sign: f32 = if (arc.angle_delta >= 0) 1 else -1;
-            break :blk .{
-                .position = arc.center + radial * @as(vec2, @splat(arc.radius)),
-                .tangent = tangent,
-                .curvature = curvature_sign / arc.radius,
-            };
-        },
+        .arc => |arc| arc_sample(arc.center, arc.radius, arc.start_angle, arc.angle_delta, t),
         .turn => |turn| blk: {
-            if (s <= turn.len_entry or turn.len_arc < 0.0001) {
-                break :blk line_sample(turn.start, turn.entry, if (turn.len_entry > 0.0001) s / turn.len_entry else 1.0);
+            if (s <= turn.len_entry or turn.len_arc < small_length_epsilon) {
+                break :blk line_sample(turn.start, turn.entry, if (turn.len_entry > small_length_epsilon) s / turn.len_entry else 1.0);
             }
             if (s < turn.len_entry + turn.len_arc) {
                 const arc_t = (s - turn.len_entry) / turn.len_arc;
-                const angle = turn.arc_start_angle + turn.arc_angle_delta * arc_t;
-                const radial = vec2{ @cos(angle), @sin(angle) };
-                const tangent = if (turn.arc_angle_delta >= 0)
-                    vec2{ -radial[1], radial[0] }
-                else
-                    vec2{ radial[1], -radial[0] };
-                const curvature_sign: f32 = if (turn.arc_angle_delta >= 0) 1 else -1;
-                break :blk .{
-                    .position = turn.arc_center + radial * @as(vec2, @splat(turn.arc_radius)),
-                    .tangent = tangent,
-                    .curvature = curvature_sign / turn.arc_radius,
-                };
+                break :blk arc_sample(
+                    turn.arc_center,
+                    turn.arc_radius,
+                    turn.arc_start_angle,
+                    turn.arc_angle_delta,
+                    arc_t,
+                );
             }
             break :blk line_sample(
                 turn.exit,
                 turn.end,
-                if (turn.len_exit > 0.0001) (s - turn.len_entry - turn.len_arc) / turn.len_exit else 1.0,
+                if (turn.len_exit > small_length_epsilon) (s - turn.len_entry - turn.len_arc) / turn.len_exit else 1.0,
             );
         },
     };
