@@ -11,20 +11,32 @@ const mat4 = la.mat4;
 
 const lane_center_offset: f32 = 0.15;
 const connector_inset: f32 = 0.48;
-const car_model_scale: f32 = 0.5;
+const car_model_scale: f32 = 0.35;
 const traffic_light_green_duration_s: f32 = 5.5;
 const traffic_light_stop_margin: f32 = 0.06;
 const follow_headway_s: f32 = 1.1;
 const follow_base_gap_factor: f32 = 1.1;
+const follow_prediction_horizon_s: f32 = 2.0;
+const follow_prediction_margin: f32 = 0.05;
+const future_collision_horizon_s: f32 = 2.0;
+const future_collision_sample_count: u32 = 4;
+const future_collision_margin: f32 = 0.015;
+const future_collision_binary_search_steps: u32 = 9;
 const follow_scan_distance_max: f32 = 4.0;
 const follow_scan_edge_count_max: u32 = 10;
 const max_spawn_attempts: u32 = 48;
 const max_path_attempts: u32 = 64;
 const max_car_count: u32 = 18;
-const turn_radius_target: f32 = 0.08;
+const turn_radius_target: f32 = 0.2;
 const debug_path_z: f32 = 0.12;
 const debug_path_width: f32 = 0.035;
 const debug_box_width: f32 = 0.02;
+const car_acceleration_default: f32 = 0.9;
+const car_deceleration_default: f32 = 2.2;
+const debug_axle_point_z: f32 = 0.16;
+const debug_front_axle_point_size: f32 = 0.05;
+const debug_rear_axle_point_size: f32 = 0.04;
+const collision_substep_distance: f32 = 0.025;
 
 const Direction = enum(u2) {
     north = 0,
@@ -121,7 +133,10 @@ const Car = struct {
     heading_rad: f32 = 0,
     steering_angle_rad: f32 = 0,
 
+    velocity_units_s: f32 = 0,
     speed_units_s: f32 = 0.55,
+    acceleration_units_s2: f32 = car_acceleration_default,
+    deceleration_units_s2: f32 = car_deceleration_default,
     model_kind: usize = 0,
     wait_timer_s: f32 = 0,
     destination_node: u32 = 0,
@@ -294,6 +309,8 @@ pub const Simulation = struct {
         for (self.cars.items) |car| {
             const obb = self.car_to_obb(&car);
             self.draw_debug_obb(obb);
+            self.draw_debug_point(car.front_axle, debug_front_axle_point_size);
+            self.draw_debug_point(car.rear_axle, debug_rear_axle_point_size);
         }
     }
 
@@ -327,6 +344,15 @@ pub const Simulation = struct {
         self.draw_debug_line_width(p1, p2, debug_box_width);
         self.draw_debug_line_width(p2, p3, debug_box_width);
         self.draw_debug_line_width(p3, p0, debug_box_width);
+    }
+
+    fn draw_debug_point(self: *const Simulation, point: vec2, size: f32) void {
+        _ = self;
+        const model = la.muln(&.{
+            la.translation(point[0] - 0.5 * size, point[1] - 0.5 * size, debug_axle_point_z),
+            la.scale(size, size, 1),
+        });
+        debug_draw.quad(&model);
     }
 
     fn car_wheelbase_world(self: *const Simulation, model_kind: usize) f32 {
@@ -532,6 +558,9 @@ pub const Simulation = struct {
             if (!try self.assign_random_route(&car, null)) break;
             const random = self.prng.random();
             car.speed_units_s = random.float(f32) * 0.25 + 0.45;
+            car.acceleration_units_s2 = random.float(f32) * 0.35 + 0.75;
+            car.deceleration_units_s2 = random.float(f32) * 0.7 + 1.9;
+            car.velocity_units_s = 0;
             car.model_kind = random.intRangeLessThan(usize, 0, assets.car_rigs.len);
             self.update_car_pose(&car);
 
@@ -702,12 +731,14 @@ pub const Simulation = struct {
         var car = &self.cars.items[@intCast(car_index)];
 
         if (car.wait_timer_s > 0) {
+            car.velocity_units_s = 0;
             car.wait_timer_s = @max(0, car.wait_timer_s - dt_s);
             if (car.wait_timer_s == 0 and car.at_node != null) {
                 const start_node = car.at_node.?;
                 if (self.assign_random_route(car, start_node)) |ok| {
                     if (ok) {
                         car.initialized = false;
+                        car.velocity_units_s = 0;
                         self.update_car_pose(car);
                     }
                 } else |_| {}
@@ -720,40 +751,97 @@ pub const Simulation = struct {
             return;
         }
 
-        var move_distance = car.speed_units_s * dt_s;
-        move_distance = self.limit_move_for_traffic_light(car, move_distance);
-        move_distance = self.limit_move_for_car_ahead(car_index, move_distance);
-        if (move_distance <= 0) return;
+        const velocity_previous = car.velocity_units_s;
+        const velocity_free = @min(
+            car.speed_units_s,
+            velocity_previous + car.acceleration_units_s2 * dt_s,
+        );
+        const velocity_cap_route = self.predictive_speed_cap_for_car_ahead(car_index);
+        const velocity_cap_obb = self.predictive_speed_cap_for_future_collisions(
+            car_index,
+            velocity_free,
+        );
+        const velocity_target_max = @min(velocity_free, @min(velocity_cap_route, velocity_cap_obb));
+        const velocity_proposed = if (velocity_target_max < velocity_previous)
+            @max(
+                velocity_target_max,
+                velocity_previous - car.deceleration_units_s2 * dt_s,
+            )
+        else
+            velocity_target_max;
+        const move_desired = 0.5 * (velocity_previous + velocity_proposed) * dt_s;
+        var move_distance_allowed = self.limit_move_for_traffic_light(car, move_desired);
+        move_distance_allowed = self.limit_move_for_car_ahead(car_index, move_distance_allowed);
 
-        const previous_edge_index = car.route_edge_index;
-        const previous_t = car.edge_t;
-        const previous_rear = car.rear_axle;
-        const previous_front = car.front_axle;
-        const previous_heading = car.heading_rad;
-        const previous_steer = car.steering_angle_rad;
-        const previous_initialized = car.initialized;
-
-        self.advance_car(car, move_distance);
-        self.update_car_pose(car);
-
-        if (self.car_overlaps_any(car_index)) {
-            car.route_edge_index = previous_edge_index;
-            car.edge_t = previous_t;
-            car.rear_axle = previous_rear;
-            car.front_axle = previous_front;
-            car.heading_rad = previous_heading;
-            car.steering_angle_rad = previous_steer;
-            car.initialized = previous_initialized;
+        if (move_distance_allowed <= 0) {
+            car.velocity_units_s = @max(0, velocity_previous - car.deceleration_units_s2 * dt_s);
             return;
         }
+
+        const move_distance_planned = @min(move_desired, move_distance_allowed);
+        const move_distance_actual = self.advance_car_with_collision(car_index, move_distance_planned);
+        if (move_distance_actual <= 0) {
+            car.velocity_units_s = @max(0, velocity_previous - car.deceleration_units_s2 * dt_s);
+            return;
+        }
+
+        const velocity_required = @max(0, (2.0 * move_distance_actual / dt_s) - velocity_previous);
+        const velocity_min_after_brake = @max(
+            0,
+            velocity_previous - car.deceleration_units_s2 * dt_s,
+        );
+        car.velocity_units_s = std.math.clamp(
+            velocity_required,
+            velocity_min_after_brake,
+            velocity_proposed,
+        );
 
         if (car.route_edge_index >= car.route_edges.items.len) {
             self.car_arrive(car);
         }
     }
 
+    fn advance_car_with_collision(self: *Simulation, car_index: u32, move_distance: f32) f32 {
+        var moved_total: f32 = 0;
+        var remaining = move_distance;
+
+        while (remaining > 0) {
+            const step_distance = @min(remaining, collision_substep_distance);
+            var car = &self.cars.items[@intCast(car_index)];
+
+            const previous_edge_index = car.route_edge_index;
+            const previous_t = car.edge_t;
+            const previous_rear = car.rear_axle;
+            const previous_front = car.front_axle;
+            const previous_heading = car.heading_rad;
+            const previous_steer = car.steering_angle_rad;
+            const previous_initialized = car.initialized;
+
+            self.advance_car(car, step_distance);
+            self.update_car_pose(car);
+
+            if (self.car_overlaps_any(car_index)) {
+                car.route_edge_index = previous_edge_index;
+                car.edge_t = previous_t;
+                car.rear_axle = previous_rear;
+                car.front_axle = previous_front;
+                car.heading_rad = previous_heading;
+                car.steering_angle_rad = previous_steer;
+                car.initialized = previous_initialized;
+                break;
+            }
+
+            moved_total += step_distance;
+            remaining -= step_distance;
+            if (car.route_edge_index >= car.route_edges.items.len) break;
+        }
+
+        return moved_total;
+    }
+
     fn car_arrive(self: *Simulation, car: *Car) void {
         car.at_node = car.destination_node;
+        car.velocity_units_s = 0;
         const random = self.prng.random();
         car.wait_timer_s = random.float(f32) * 2.0 + 1.0;
     }
@@ -784,16 +872,110 @@ pub const Simulation = struct {
             if (other_index == car_index) continue;
             if (other.route_edge_index >= other.route_edges.items.len) continue;
             const distance_ahead = self.route_distance_to_other_ahead(&car, &other) orelse continue;
-            const base_gap =
-                (self.car_half_length_world(car.model_kind) + self.car_half_length_world(other.model_kind)) *
-                follow_base_gap_factor;
-            const desired_gap = base_gap + @max(car.speed_units_s, other.speed_units_s) * follow_headway_s;
+            const desired_gap = self.desired_follow_gap(&car, &other);
             if (distance_ahead < desired_gap + allowed) {
                 allowed = @min(allowed, @max(0, distance_ahead - desired_gap));
             }
         }
 
         return allowed;
+    }
+
+    fn predictive_speed_cap_for_car_ahead(self: *const Simulation, car_index: u32) f32 {
+        const car = self.cars.items[@intCast(car_index)];
+        if (car.route_edge_index >= car.route_edges.items.len) return car.speed_units_s;
+
+        var speed_cap = car.speed_units_s;
+        for (self.cars.items, 0..) |other, other_index| {
+            if (other_index == car_index) continue;
+            if (other.route_edge_index >= other.route_edges.items.len) continue;
+
+            const distance_ahead = self.route_distance_to_other_ahead(&car, &other) orelse continue;
+            const desired_gap = self.desired_follow_gap(&car, &other) + follow_prediction_margin;
+            const cap = other.velocity_units_s +
+                (distance_ahead - desired_gap) / follow_prediction_horizon_s;
+            speed_cap = @min(speed_cap, @max(0, cap));
+        }
+
+        return speed_cap;
+    }
+
+    fn desired_follow_gap(self: *const Simulation, car: *const Car, other: *const Car) f32 {
+        const base_gap =
+            (self.car_half_length_world(car.model_kind) + self.car_half_length_world(other.model_kind)) *
+            follow_base_gap_factor;
+        return base_gap + @max(car.velocity_units_s, other.velocity_units_s) * follow_headway_s;
+    }
+
+    fn predictive_speed_cap_for_future_collisions(
+        self: *const Simulation,
+        car_index: u32,
+        velocity_limit: f32,
+    ) f32 {
+        const car = self.cars.items[@intCast(car_index)];
+        if (car.route_edge_index >= car.route_edges.items.len) return 0;
+
+        var speed_cap = velocity_limit;
+        for (self.cars.items, 0..) |other, other_index| {
+            if (other_index == car_index) continue;
+            if (other.route_edge_index >= other.route_edges.items.len and other.wait_timer_s <= 0) continue;
+
+            if (!self.future_obb_overlap_for_speed(&car, &other, speed_cap)) continue;
+
+            var low: f32 = 0;
+            var high = speed_cap;
+            var step: u32 = 0;
+            while (step < future_collision_binary_search_steps) : (step += 1) {
+                const mid = 0.5 * (low + high);
+                if (self.future_obb_overlap_for_speed(&car, &other, mid)) {
+                    high = mid;
+                } else {
+                    low = mid;
+                }
+            }
+
+            speed_cap = @min(speed_cap, low);
+            if (speed_cap <= 0.001) return 0;
+        }
+
+        return speed_cap;
+    }
+
+    fn future_obb_overlap_for_speed(
+        self: *const Simulation,
+        car: *const Car,
+        other: *const Car,
+        car_speed_units_s: f32,
+    ) bool {
+        var sample_index: u32 = 1;
+        while (sample_index <= future_collision_sample_count) : (sample_index += 1) {
+            const t = future_collision_horizon_s *
+                (@as(f32, @floatFromInt(sample_index)) / @as(f32, @floatFromInt(future_collision_sample_count)));
+            const car_obb = self.predicted_obb_at_time(car, t, car_speed_units_s);
+            const other_speed = if (other.wait_timer_s > 0) 0 else other.velocity_units_s;
+            const other_obb = self.predicted_obb_at_time(other, t, other_speed);
+            if (obb_overlap(
+                obb_with_margin(car_obb, future_collision_margin),
+                obb_with_margin(other_obb, future_collision_margin),
+            )) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn predicted_obb_at_time(
+        self: *const Simulation,
+        car: *const Car,
+        time_s: f32,
+        speed_units_s: f32,
+    ) OBB {
+        var predicted = car.*;
+        if (speed_units_s > 0 and predicted.route_edge_index < predicted.route_edges.items.len) {
+            self.advance_car(&predicted, speed_units_s * time_s);
+            self.update_car_pose(&predicted);
+        }
+        return self.car_to_obb(&predicted);
     }
 
     fn route_distance_to_other_ahead(self: *const Simulation, car: *const Car, other: *const Car) ?f32 {
@@ -1164,6 +1346,16 @@ fn axis_projection_radius(obb: OBB, axis: vec2) f32 {
     const x = @abs(la.dot(vec2, obb.axis_forward, axis)) * obb.half_length;
     const y = @abs(la.dot(vec2, obb.axis_right, axis)) * obb.half_width;
     return x + y;
+}
+
+fn obb_with_margin(obb: OBB, margin: f32) OBB {
+    return .{
+        .center = obb.center,
+        .axis_forward = obb.axis_forward,
+        .axis_right = obb.axis_right,
+        .half_length = obb.half_length + margin,
+        .half_width = obb.half_width + margin,
+    };
 }
 
 fn obb_overlap(a: OBB, b: OBB) bool {
