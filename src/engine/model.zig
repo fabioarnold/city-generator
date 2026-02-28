@@ -44,6 +44,11 @@ pub const ShaderInfo = struct {
     blend_skin_loc: ?gl.int = null,
 };
 
+pub const LocalMatrixOverride = struct {
+    node_index: usize,
+    delta: mat4,
+};
+
 gltf: Gltf,
 buffer_objects: []gl.uint,
 textures: []gl.uint,
@@ -183,17 +188,32 @@ pub fn findNodeByName(self: *const Model, name: []const u8) ?usize {
 }
 
 pub fn drawNode(self: *Model, si: ShaderInfo, model_mat: mat4, root_node_index: usize) void {
+    self.drawNodeWithLocalOverrides(si, model_mat, root_node_index, &.{});
+}
+
+pub fn drawNodeWithLocalOverrides(
+    self: *Model,
+    si: ShaderInfo,
+    model_mat: mat4,
+    root_node_index: usize,
+    overrides: []const LocalMatrixOverride,
+) void {
     const nodes = self.gltf.data.nodes;
 
-    var local_transforms: [256]Transform = undefined;
+    var local_matrices: [256]mat4 = undefined;
     for (nodes, 0..) |*node, i| {
-        local_transforms[i] = Transform.from_node(node);
+        local_matrices[i] = Transform.from_node(node).to_mat4();
+    }
+
+    for (overrides) |override| {
+        std.debug.assert(override.node_index < nodes.len);
+        local_matrices[override.node_index] = la.mul(local_matrices[override.node_index], override.delta);
     }
 
     var global_transforms: [256]mat4 = undefined;
     var draw_mask: [256]bool = .{false} ** 256;
 
-    self.computeSubtreeTransforms(&local_transforms, &global_transforms, &draw_mask, root_node_index, model_mat);
+    self.computeSubtreeTransforms(&local_matrices, &global_transforms, &draw_mask, root_node_index, model_mat);
 
     const data = &self.gltf.data;
     for (nodes, 0..) |*node, node_i| {
@@ -205,15 +225,22 @@ pub fn drawNode(self: *Model, si: ShaderInfo, model_mat: mat4, root_node_index: 
     }
 }
 
-fn computeSubtreeTransforms(self: *Model, local_transforms: []const Transform, out_matrices: []mat4, draw_mask: []bool, node_index: usize, current_mat: mat4) void {
+fn computeSubtreeTransforms(
+    self: *Model,
+    local_matrices: []const mat4,
+    out_matrices: []mat4,
+    draw_mask: []bool,
+    node_index: usize,
+    current_mat: mat4,
+) void {
     const node = &self.gltf.data.nodes[node_index];
-    const local_mat = local_transforms[node_index].to_mat4();
+    const local_mat = local_matrices[node_index];
     const global_mat = la.mul(current_mat, local_mat);
     out_matrices[node_index] = global_mat;
     draw_mask[node_index] = true;
 
     for (node.children) |child_index| {
-        self.computeSubtreeTransforms(local_transforms, out_matrices, draw_mask, child_index, global_mat);
+        self.computeSubtreeTransforms(local_matrices, out_matrices, draw_mask, child_index, global_mat);
     }
 }
 

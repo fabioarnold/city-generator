@@ -65,6 +65,22 @@ pub fn is_park(index: u6) bool {
     return tile_infos[index - 1].is_park;
 }
 
+fn street_base_mask(index: u6) u4 {
+    return switch (index) {
+        assets.tile_road_straight, assets.tile_road_crossing => 0b0101,
+        assets.tile_road_corner => 0b0110,
+        assets.tile_road_tsplit => 0b0111,
+        assets.tile_road_junction => 0b1111,
+        else => 0,
+    };
+}
+
+pub fn street_openings(tile: Tile) u4 {
+    if (!is_street(tile.index)) return 0;
+    const base_mask = street_base_mask(tile.index);
+    return std.math.rotr(u4, base_mask, tile.rot);
+}
+
 pub const StreetTile = struct {
     index: u6,
     mask: u4, // bit 0: North, bit 1: East, bit 2: South, bit 3: West

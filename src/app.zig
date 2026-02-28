@@ -19,6 +19,7 @@ const muln = la.muln;
 const Model = @import("engine/model.zig");
 const GBuffer = @import("engine/gbuffer.zig");
 const primitives = @import("engine/primitives.zig");
+const traffic_pkg = @import("traffic.zig");
 
 pub var video_width: f32 = 1280;
 pub var video_height: f32 = 720;
@@ -45,6 +46,7 @@ var camera: Camera = .{};
 
 const tilemap_pkg = @import("tilemap.zig");
 pub var tilemap: tilemap_pkg.TileMap = undefined;
+var traffic_sim: traffic_pkg.Simulation = undefined;
 var allocator: std.mem.Allocator = undefined;
 
 var gbuffer: GBuffer = undefined;
@@ -58,6 +60,13 @@ var toolbar_rect: gfx.Rect = .{
 
 var current_tile: tilemap_pkg.Tile = .{ .index = 0, .rot = 0 };
 var current_building_type: u3 = 0;
+const Tool = enum(u2) {
+    bulldozer,
+    building,
+    road,
+    park,
+};
+var selected_tool: ?Tool = null;
 
 pub fn init(arena: std.mem.Allocator) !void {
     allocator = arena;
@@ -92,6 +101,7 @@ pub fn init(arena: std.mem.Allocator) !void {
     try gbuffer.create();
 
     tilemap = tilemap_pkg.TileMap.init(arena);
+    traffic_sim = traffic_pkg.Simulation.init(arena);
 
     var loaded = false;
     if (builtin.cpu.arch.isWasm()) {
@@ -129,6 +139,8 @@ pub fn init(arena: std.mem.Allocator) !void {
 
         center_camera_on_map();
     }
+
+    try traffic_sim.rebuild_from_tilemap(&tilemap);
 }
 
 pub fn save_state() !void {
@@ -203,6 +215,8 @@ fn update() void {
         current_tile.rot +%= 1;
     }
     key_down_r = input.key_down(.r);
+
+    traffic_sim.update(time.dt);
 }
 
 pub fn draw(frame_arena: std.mem.Allocator) void {
@@ -222,6 +236,7 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
     gfx.begin_frame(frame_arena, video_scale);
     draw_scene_to_gbuffer(projection, view, cursor_pos);
     draw_post_process();
+    traffic_sim.draw_debug_paths(projection, view);
 
     const ortho = la.ortho(0, video_width, video_height, 0, -1000, 1000);
     gl.Clear(gl.DEPTH_BUFFER_BIT);
@@ -252,44 +267,55 @@ fn calculate_cursor_world_pos(projection: mat4, view: mat4) vec3 {
 }
 
 fn handle_tile_placement(cursor_pos: vec3) !void {
+    if (selected_tool == null) return;
+
     const x: i32 = @intFromFloat(@round(cursor_pos[0] - 0.5));
     const y: i32 = @intFromFloat(@round(cursor_pos[1] - 0.5));
+    var changed = false;
 
     const old_tile = tilemap.get_tile(x, y);
-    if (current_tile.index == 0) {
-        if (old_tile.index != 0) {
-            const was_street = tilemap_pkg.is_street(old_tile.index);
-            try tilemap.set_tile(x, y, .{});
-            if (was_street) {
-                // Update neighbors to recalculate their connections
-                try tilemap.update_tile_autotiling(x, y + 1);
-                try tilemap.update_tile_autotiling(x + 1, y);
-                try tilemap.update_tile_autotiling(x, y - 1);
-                try tilemap.update_tile_autotiling(x - 1, y);
+    switch (selected_tool.?) {
+        .bulldozer => {
+            if (old_tile.index != 0) {
+                const was_street = tilemap_pkg.is_street(old_tile.index);
+                try tilemap.set_tile(x, y, .{});
+                changed = true;
+                if (was_street) {
+                    // Update neighbors to recalculate their connections
+                    try tilemap.update_tile_autotiling(x, y + 1);
+                    try tilemap.update_tile_autotiling(x + 1, y);
+                    try tilemap.update_tile_autotiling(x, y - 1);
+                    try tilemap.update_tile_autotiling(x - 1, y);
+                }
             }
-        }
-        return;
+        },
+        .road => {
+            if (!tilemap_pkg.is_street(old_tile.index)) {
+                try tilemap.place_street(x, y);
+                changed = true;
+            }
+        },
+        .building => {
+            if (old_tile.index == 0 or tilemap_pkg.is_building(old_tile.index)) {
+                var tile = current_tile;
+                tile.rot = tilemap.get_building_orientation(x, y);
+                try tilemap.set_tile(x, y, tile);
+                changed = true;
+
+                // Randomize for next placement
+                current_building_type = prng.random().int(u3);
+                current_tile.index = assets.tile_building_a + current_building_type;
+            }
+        },
+        .park => {
+            if (!tilemap_pkg.is_park(old_tile.index)) {
+                try tilemap.place_park(x, y);
+                changed = true;
+            }
+        },
     }
 
-    if (tilemap_pkg.is_street(current_tile.index)) {
-        if (!tilemap_pkg.is_street(old_tile.index)) try tilemap.place_street(x, y);
-    } else if (tilemap_pkg.is_building(current_tile.index)) {
-        if (old_tile.index == 0 or tilemap_pkg.is_building(old_tile.index)) {
-            var tile = current_tile;
-            tile.rot = tilemap.get_building_orientation(x, y);
-            try tilemap.set_tile(x, y, tile);
-
-            // Randomize for next placement
-            current_building_type = prng.random().int(u3);
-            current_tile.index = assets.tile_building_a + current_building_type;
-        }
-    } else if (tilemap_pkg.is_park(current_tile.index)) {
-        if (!tilemap_pkg.is_park(old_tile.index)) try tilemap.place_park(x, y);
-    } else {
-        if (old_tile.index != current_tile.index or old_tile.rot != current_tile.rot) {
-            try tilemap.set_tile(x, y, current_tile);
-        }
-    }
+    if (changed) try traffic_sim.rebuild_from_tilemap(&tilemap);
 }
 
 fn draw_scene_to_gbuffer(projection: mat4, view: mat4, cursor_pos: vec3) void {
@@ -357,7 +383,7 @@ fn draw_map(projection: mat4, view: mat4, cursor_pos: vec3) void {
                     const y: i32 = @as(i32, key.y) * tilemap_pkg.chunk_size + @as(i32, @intCast(ly));
 
                     const is_hovered = x == @as(i32, @intFromFloat(@round(cursor_pos[0] - 0.5))) and y == @as(i32, @intFromFloat(@round(cursor_pos[1] - 0.5)));
-                    if (is_hovered) {
+                    if (selected_tool != null and is_hovered) {
                         continue;
                     }
 
@@ -374,33 +400,35 @@ fn draw_map(projection: mat4, view: mat4, cursor_pos: vec3) void {
         }
     }
 
-    const model = muln(&.{
-        la.translation(0.15 + 0.5, 1 + 0.5, 0.0723),
-        la.rotation(180, .{ 0, 0, 1 }),
-        la.scale(0.5, 0.5, 0.5),
-    });
-    assets.citykit_model.drawNode(si, model, assets.car_small_node_index);
+    traffic_sim.draw(projection, view);
 }
 
 fn draw_ghost_preview(projection: mat4, view: mat4, cursor_pos: vec3) void {
+    if (selected_tool == null) return;
+
     const x: i32 = @intFromFloat(@round(cursor_pos[0] - 0.5));
     const y: i32 = @intFromFloat(@round(cursor_pos[1] - 0.5));
 
     var target_tile = current_tile;
     var preview_color: [4]f32 = .{ 1.0, 1.0, 1.0, 0.5 };
 
-    if (current_tile.index == 0) {
-        // If delete tool, use the old tile but tinted red
-        const old_tile = tilemap.get_tile(x, y);
-        if (old_tile.index == 0) return; // Nothing to delete
-        target_tile = old_tile;
-        preview_color = .{ 1.0, 0.0, 0.0, 0.5 };
-    } else if (tilemap_pkg.is_building(current_tile.index)) {
-        target_tile.rot = tilemap.get_building_orientation(x, y);
-    } else if (tilemap_pkg.is_street(current_tile.index)) {
-        target_tile = tilemap.get_street_autotile(x, y);
-    } else if (tilemap_pkg.is_park(current_tile.index)) {
-        preview_color = .{ 0.2, 0.8, 0.2, 0.5 };
+    switch (selected_tool.?) {
+        .bulldozer => {
+            // If delete tool, use the old tile but tinted red.
+            const old_tile = tilemap.get_tile(x, y);
+            if (old_tile.index == 0) return; // Nothing to delete.
+            target_tile = old_tile;
+            preview_color = .{ 1.0, 0.0, 0.0, 0.5 };
+        },
+        .building => {
+            target_tile.rot = tilemap.get_building_orientation(x, y);
+        },
+        .road => {
+            target_tile = tilemap.get_street_autotile(x, y);
+        },
+        .park => {
+            preview_color = .{ 0.2, 0.8, 0.2, 0.5 };
+        },
     }
 
     // Disable color write for depth pre-pass
@@ -477,9 +505,14 @@ fn draw_toolbar(_: std.mem.Allocator, projection: mat4) !void {
     gfx.fill_rect(.{ .x = toolbar_rect.x, .y = toolbar_rect.y + toolbar_rect.h - 1, .w = toolbar_rect.w, .h = 1 });
     gfx.fill_rect(.{ .x = toolbar_rect.x + toolbar_rect.w - 1, .y = toolbar_rect.y, .w = 1, .h = toolbar_rect.h });
 
-    const active_index: usize = if (current_tile.index == 0) 0 else if (tilemap_pkg.is_building(current_tile.index)) 1 else if (tilemap_pkg.is_street(current_tile.index)) 2 else if (tilemap_pkg.is_park(current_tile.index)) 3 else 0;
-
-    var new_active_index: ?usize = null;
+    const active_index: ?usize = if (selected_tool) |tool| switch (tool) {
+        .bulldozer => 0,
+        .building => 1,
+        .road => 2,
+        .park => 3,
+    } else null;
+    var new_active_index = active_index;
+    var changed_selection = false;
 
     const icon_textures = [_]gl.uint{
         assets.tex_bulldozer,
@@ -494,10 +527,15 @@ fn draw_toolbar(_: std.mem.Allocator, projection: mat4) !void {
         const hover = math.point_in_rect(input.mx, input.my, cx, cy, tile_width, tile_width);
 
         if (hover and input.framedown) {
-            new_active_index = i;
+            changed_selection = true;
+            if (active_index != null and active_index.? == i) {
+                new_active_index = null;
+            } else {
+                new_active_index = i;
+            }
         }
 
-        const pressed = (active_index == i);
+        const pressed = active_index != null and active_index.? == i;
 
         // Draw Button Bevel
         if (pressed) {
@@ -547,17 +585,27 @@ fn draw_toolbar(_: std.mem.Allocator, projection: mat4) !void {
         gfx.set_texture(0, .zero);
     }
 
-    if (new_active_index) |idx| {
-        if (idx == 0) current_tile.index = 0;
-        if (idx == 1) {
-            // Randomize building type if already selected
-            if (tilemap_pkg.is_building(current_tile.index)) {
-                current_building_type = prng.random().int(u3);
-            }
-            current_tile.index = assets.tile_building_a + current_building_type;
+    if (changed_selection) {
+        if (new_active_index) |idx| {
+            selected_tool = switch (idx) {
+                0 => .bulldozer,
+                1 => .building,
+                2 => .road,
+                3 => .park,
+                else => unreachable,
+            };
+        } else {
+            selected_tool = null;
         }
-        if (idx == 2) current_tile.index = assets.tile_road_straight;
-        if (idx == 3) current_tile.index = 14; // Park
+    }
+
+    if (selected_tool) |tool| {
+        switch (tool) {
+            .bulldozer => current_tile.index = 0,
+            .building => current_tile.index = assets.tile_building_a + current_building_type,
+            .road => current_tile.index = assets.tile_road_straight,
+            .park => current_tile.index = 14, // Park
+        }
     }
 }
 
