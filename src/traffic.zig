@@ -14,6 +14,7 @@ const connector_inset: f32 = 0.48;
 const car_model_scale: f32 = 0.35;
 const traffic_light_green_duration_s: f32 = 5.5;
 const traffic_light_stop_margin: f32 = 0.06;
+const intersection_clearance_margin: f32 = 0.2;
 const follow_headway_s: f32 = 1.1;
 const follow_base_gap_factor: f32 = 1.1;
 const follow_prediction_horizon_s: f32 = 2.0;
@@ -156,6 +157,11 @@ const OBB = struct {
     axis_right: vec2,
     half_length: f32,
     half_width: f32,
+};
+
+const AheadInfo = struct {
+    distance: f32,
+    other_index: usize,
 };
 
 pub const Simulation = struct {
@@ -367,6 +373,10 @@ pub const Simulation = struct {
         _ = self;
         const rig = assets.car_rigs[model_kind];
         return 0.5 * (rig.bbox_max_y_model - rig.bbox_min_y_model) * car_model_scale;
+    }
+
+    fn car_length_world(self: *const Simulation, model_kind: usize) f32 {
+        return 2.0 * self.car_half_length_world(model_kind);
     }
 
     fn clear_cars(self: *Simulation) void {
@@ -856,11 +866,16 @@ pub const Simulation = struct {
         const next_edge = self.edges.items[@intCast(next_edge_id)];
 
         if (next_edge.edge_type != .transition) return move_distance;
-        if (!self.light_blocks(next_edge.to_tile_x, next_edge.to_tile_y, next_edge.to_side)) return move_distance;
-
+        if (!self.has_light_at(next_edge.to_tile_x, next_edge.to_tile_y)) return move_distance;
         const remaining = current_edge.length * (1.0 - car.edge_t);
-        if (remaining > move_distance + traffic_light_stop_margin) return move_distance;
-        return @max(0, remaining - traffic_light_stop_margin);
+        const stop_distance = @max(0, remaining - traffic_light_stop_margin);
+        if (self.light_blocks(next_edge.to_tile_x, next_edge.to_tile_y, next_edge.to_side) or
+            !self.intersection_entry_allowed(car))
+        {
+            if (remaining > move_distance + traffic_light_stop_margin) return move_distance;
+            return stop_distance;
+        }
+        return move_distance;
     }
 
     fn limit_move_for_car_ahead(self: *const Simulation, car_index: u32, move_distance: f32) f32 {
@@ -905,6 +920,96 @@ pub const Simulation = struct {
             (self.car_half_length_world(car.model_kind) + self.car_half_length_world(other.model_kind)) *
             follow_base_gap_factor;
         return base_gap + @max(car.velocity_units_s, other.velocity_units_s) * follow_headway_s;
+    }
+
+    fn has_light_at(self: *const Simulation, tile_x: i32, tile_y: i32) bool {
+        for (self.lights.items) |light| {
+            if (light.tile_x == tile_x and light.tile_y == tile_y) return true;
+        }
+        return false;
+    }
+
+    fn intersection_entry_allowed(self: *const Simulation, car: *const Car) bool {
+        if (car.route_edge_index >= car.route_edges.items.len) return false;
+        if (car.route_edge_index + 1 >= car.route_edges.items.len) return true;
+
+        const current_edge_id = car.route_edges.items[@intCast(car.route_edge_index)];
+        const current_edge = self.edges.items[@intCast(current_edge_id)];
+        const next_edge_id = car.route_edges.items[@intCast(car.route_edge_index + 1)];
+        const next_edge = self.edges.items[@intCast(next_edge_id)];
+        if (next_edge.edge_type != .transition) return true;
+        if (!self.has_light_at(next_edge.to_tile_x, next_edge.to_tile_y)) return true;
+        if (self.intersection_has_cars_inside(
+            next_edge.to_tile_x,
+            next_edge.to_tile_y,
+            car,
+        )) return false;
+
+        var distance_to_clear = next_edge.length + self.car_length_world(car.model_kind) + intersection_clearance_margin;
+        if (car.route_edge_index + 2 < car.route_edges.items.len) {
+            const through_edge_id = car.route_edges.items[@intCast(car.route_edge_index + 2)];
+            const through_edge = self.edges.items[@intCast(through_edge_id)];
+            distance_to_clear += through_edge.length;
+        }
+
+        const remaining_to_stop = @max(
+            0,
+            current_edge.length * (1.0 - car.edge_t) - traffic_light_stop_margin,
+        );
+        const ahead = self.nearest_route_car_ahead(car) orelse return true;
+        const other = self.cars.items[ahead.other_index];
+        const gap_needed = self.desired_follow_gap(car, &other);
+        return ahead.distance >= remaining_to_stop + distance_to_clear + gap_needed;
+    }
+
+    fn intersection_has_cars_inside(
+        self: *const Simulation,
+        tile_x: i32,
+        tile_y: i32,
+        requester: *const Car,
+    ) bool {
+        for (self.cars.items, 0..) |_, other_index| {
+            const other_ptr = &self.cars.items[other_index];
+            if (other_ptr == requester) continue;
+            if (self.car_occupies_tile(other_ptr, tile_x, tile_y)) return true;
+        }
+        return false;
+    }
+
+    fn car_occupies_tile(
+        self: *const Simulation,
+        car: *const Car,
+        tile_x: i32,
+        tile_y: i32,
+    ) bool {
+        if (car.route_edge_index >= car.route_edges.items.len) return false;
+        const edge_id = car.route_edges.items[@intCast(car.route_edge_index)];
+        const edge = self.edges.items[@intCast(edge_id)];
+        return switch (edge.edge_type) {
+            .in_tile => edge.tile_x == tile_x and edge.tile_y == tile_y,
+            .transition => blk: {
+                const in_from = edge.from_tile_x == tile_x and edge.from_tile_y == tile_y and car.edge_t < 0.95;
+                const in_to = edge.to_tile_x == tile_x and edge.to_tile_y == tile_y and car.edge_t > 0.05;
+                break :blk in_from or in_to;
+            },
+        };
+    }
+
+    fn nearest_route_car_ahead(self: *const Simulation, car: *const Car) ?AheadInfo {
+        var nearest: ?AheadInfo = null;
+        for (self.cars.items, 0..) |other, other_index| {
+            if (&self.cars.items[other_index] == car) continue;
+            if (other.route_edge_index >= other.route_edges.items.len) continue;
+
+            const distance = self.route_distance_to_other_ahead(car, &other) orelse continue;
+            if (nearest == null or distance < nearest.?.distance) {
+                nearest = .{
+                    .distance = distance,
+                    .other_index = other_index,
+                };
+            }
+        }
+        return nearest;
     }
 
     fn predictive_speed_cap_for_future_collisions(
