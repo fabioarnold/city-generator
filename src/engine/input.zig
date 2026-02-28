@@ -156,7 +156,7 @@ pub const KeyCode = enum(u32) {
             .left => .left,
             .up => .up,
             .down => .down,
-            .shift => .lshift,
+            .shift => .left_shift,
             else => @panic("not implemented"),
         };
     }

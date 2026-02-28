@@ -84,8 +84,8 @@ pub fn main() !void {
                 .mouse_motion => |mouse| {
                     input.mx = mouse.x;
                     input.my = mouse.y;
-                    input.mouse_dx += mouse.relative_x;
-                    input.mouse_dy += mouse.relative_y;
+                    input.mouse_dx += mouse.x_rel;
+                    input.mouse_dy += mouse.y_rel;
                 },
                 .mouse_button_down => |mouse| {
                     if (mouse.button == .left) input.framedown = true;

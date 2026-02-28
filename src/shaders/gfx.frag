@@ -61,7 +61,4 @@ void main() {
     }
 
     out_color.rgb *= out_color.a; // premultiplied alpha
-
-    if (out_color.a == 0.0)
-        discard;
 }

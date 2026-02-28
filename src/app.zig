@@ -49,14 +49,15 @@ var allocator: std.mem.Allocator = undefined;
 
 var gbuffer: GBuffer = undefined;
 
-var box = gfx.Rect{
-    .x = 32,
-    .y = 200,
-    .w = 184 + 12,
-    .h = 400,
+var toolbar_rect: gfx.Rect = .{
+    .x = 0,
+    .y = 0,
+    .w = 0,
+    .h = 0,
 };
 
 var current_tile: tilemap_pkg.Tile = .{ .index = 0, .rot = 0 };
+var current_building_type: u3 = 0;
 
 pub fn init(arena: std.mem.Allocator) !void {
     allocator = arena;
@@ -92,28 +93,58 @@ pub fn init(arena: std.mem.Allocator) !void {
 
     tilemap = tilemap_pkg.TileMap.init(arena);
 
+    var loaded = false;
     if (builtin.cpu.arch.isWasm()) {
-        tilemap.load_state() catch |err| log.err("Failed to load map: {}", .{err});
+        const size = wasm.js_get_state_size();
+        if (size > 0) {
+            const buf = try arena.alloc(u8, size);
+            wasm.js_read_state(buf);
+            var fbs = std.io.fixedBufferStream(buf);
+            const reader = fbs.reader();
+
+            var cam_bytes: [@sizeOf(vec3) + @sizeOf(f32) * 2]u8 = undefined;
+            try reader.readNoEof(&cam_bytes);
+            camera.position = std.mem.bytesToValue(vec3, cam_bytes[0..@sizeOf(vec3)]);
+            camera.phi = std.mem.bytesToValue(f32, cam_bytes[@sizeOf(vec3)..][0..4]);
+            camera.theta = std.mem.bytesToValue(f32, cam_bytes[@sizeOf(vec3) + 4 ..][0..4]);
+
+            try tilemap.load(reader);
+            loaded = true;
+        }
     }
 
-    if (tilemap.chunks.count() == 0) {
-        // Create a small starting map
-        try tilemap.place_street(0, 0);
-        try tilemap.place_street(1, 0);
-        try tilemap.place_street(2, 0);
-        try tilemap.place_street(2, 1);
-        try tilemap.place_street(2, 2);
-        try tilemap.place_street(1, 2);
-        try tilemap.place_street(0, 2);
-        try tilemap.place_street(0, 1);
-        try tilemap.place_building(1, 1, prng.random());
-    }
+    if (!loaded) {
+        if (tilemap.chunks.count() == 0) {
+            // Create a small starting map
+            try tilemap.place_street(0, 0);
+            try tilemap.place_street(1, 0);
+            try tilemap.place_street(2, 0);
+            try tilemap.place_street(2, 1);
+            try tilemap.place_street(2, 2);
+            try tilemap.place_street(1, 2);
+            try tilemap.place_street(0, 2);
+            try tilemap.place_street(0, 1);
+            try tilemap.place_building(1, 1, prng.random());
+        }
 
-    center_camera_on_map();
+        center_camera_on_map();
+    }
 }
 
 pub fn save_state() !void {
-    try tilemap.save_state();
+    var out_list = std.ArrayList(u8).empty;
+    defer out_list.deinit(allocator);
+    const writer = out_list.writer(allocator);
+
+    try writer.writeAll(std.mem.asBytes(&camera.position));
+    try writer.writeAll(std.mem.asBytes(&camera.phi));
+    try writer.writeAll(std.mem.asBytes(&camera.theta));
+
+    try tilemap.save(writer);
+
+    if (builtin.cpu.arch.isWasm()) {
+        wasm.js_save_state(out_list.items);
+    }
 }
 
 pub fn center_camera_on_map() void {
@@ -168,8 +199,6 @@ fn update() void {
     camera.theta = std.math.clamp(camera.theta, -89, 89);
     camera.position += la.vec3_from_vec4(la.mul_vector(la.rotation(-camera.phi, .{ 0, 0, 1 }), move));
 
-    box.y = video_height / 2 - box.h / 2;
-
     if (input.key_down(.r) and !key_down_r) {
         current_tile.rot +%= 1;
     }
@@ -184,9 +213,9 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
     const view = camera.view();
 
     const cursor_pos = calculate_cursor_world_pos(projection, view);
-    const tilepicker_hover = math.point_in_rect(input.mx, input.my, box.x, box.y, box.w, box.h);
+    const toolbar_hover = math.point_in_rect(input.mx, input.my, toolbar_rect.x, toolbar_rect.y, toolbar_rect.w, toolbar_rect.h);
 
-    if (input.down and !tilepicker_hover) {
+    if (input.down and !toolbar_hover) {
         handle_tile_placement(cursor_pos) catch |err| log.err("Failed to place tile: {}", .{err});
     }
 
@@ -196,7 +225,9 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
 
     const ortho = la.ortho(0, video_width, video_height, 0, -1000, 1000);
     gl.Clear(gl.DEPTH_BUFFER_BIT);
-    draw_tilepicker(frame_arena, ortho) catch @panic("Out of memory on tilepicker draw.");
+    gl.Enable(gl.BLEND);
+    gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    draw_toolbar(frame_arena, ortho) catch @panic("Out of memory on toolbar draw.");
 }
 
 fn calculate_cursor_world_pos(projection: mat4, view: mat4) vec3 {
@@ -243,7 +274,17 @@ fn handle_tile_placement(cursor_pos: vec3) !void {
     if (tilemap_pkg.is_street(current_tile.index)) {
         if (!tilemap_pkg.is_street(old_tile.index)) try tilemap.place_street(x, y);
     } else if (tilemap_pkg.is_building(current_tile.index)) {
-        if (!tilemap_pkg.is_building(old_tile.index)) try tilemap.place_building(x, y, prng.random());
+        if (old_tile.index == 0 or tilemap_pkg.is_building(old_tile.index)) {
+            var tile = current_tile;
+            tile.rot = tilemap.get_building_orientation(x, y);
+            try tilemap.set_tile(x, y, tile);
+
+            // Randomize for next placement
+            current_building_type = prng.random().int(u3);
+            current_tile.index = assets.tile_building_a + current_building_type;
+        }
+    } else if (tilemap_pkg.is_park(current_tile.index)) {
+        if (!tilemap_pkg.is_park(old_tile.index)) try tilemap.place_park(x, y);
     } else {
         if (old_tile.index != current_tile.index or old_tile.rot != current_tile.rot) {
             try tilemap.set_tile(x, y, current_tile);
@@ -263,10 +304,28 @@ fn draw_scene_to_gbuffer(projection: mat4, view: mat4, cursor_pos: vec3) void {
         gl.Viewport(0, 0, width, height);
     }
 
-    gl.Enable(gl.DEPTH_TEST);
-    draw_map(projection, view);
-    draw_ghost_preview(cursor_pos);
+    // Draw background
     gl.Disable(gl.DEPTH_TEST);
+    draw_background(view, 45.0, la.normalize(vec3, .{ 1.0, 1.0, 1.0 }));
+
+    gl.Enable(gl.DEPTH_TEST);
+    draw_map(projection, view, cursor_pos);
+    draw_ghost_preview(projection, view, cursor_pos);
+    gl.Disable(gl.DEPTH_TEST);
+}
+
+fn draw_background(view: mat4, fov: f32, sun_pos: vec3) void {
+    gl.UseProgram(shaders.background.program);
+    gl.UniformMatrix4fv(shaders.background.u_view, 1, gl.FALSE, @ptrCast(&view));
+    gl.Uniform1f(shaders.background.u_fov, fov);
+    gl.Uniform2f(shaders.background.u_resolution, video_width * video_scale, video_height * video_scale);
+    gl.Uniform3f(shaders.background.u_sun_pos, sun_pos[0], sun_pos[1], sun_pos[2]);
+
+    gl.ActiveTexture(gl.TEXTURE0);
+    gl.BindTexture(gl.TEXTURE_2D, assets.tex_grass);
+    gl.Uniform1i(shaders.background.u_grass_tex, 0);
+
+    primitives.quad();
 }
 
 fn draw_post_process() void {
@@ -281,7 +340,7 @@ fn draw_post_process() void {
     primitives.quad();
 }
 
-fn draw_map(projection: mat4, view: mat4) void {
+fn draw_map(projection: mat4, view: mat4, cursor_pos: vec3) void {
     gl.UseProgram(shaders.default.program);
     gl.UniformMatrix4fv(shaders.default.u_projection, 1, gl.FALSE, @ptrCast(&projection));
     gl.UniformMatrix4fv(shaders.default.u_view, 1, gl.FALSE, @ptrCast(&view));
@@ -296,112 +355,209 @@ fn draw_map(projection: mat4, view: mat4) void {
                 if (tile.index > 0) {
                     const x: i32 = @as(i32, key.x) * tilemap_pkg.chunk_size + @as(i32, @intCast(lx));
                     const y: i32 = @as(i32, key.y) * tilemap_pkg.chunk_size + @as(i32, @intCast(ly));
+
+                    const is_hovered = x == @as(i32, @intFromFloat(@round(cursor_pos[0] - 0.5))) and y == @as(i32, @intFromFloat(@round(cursor_pos[1] - 0.5)));
+                    if (is_hovered) {
+                        continue;
+                    }
+
                     const model = muln(&.{
                         la.translation(i2f(x) + 0.5, i2f(y) + 0.5, 0),
                         la.rotation(i2f(tile.rot) * 90, .{ 0, 0, 1 }),
                         la.scale(0.5, 0.5, 0.5),
                     });
-                    assets.model_tiles[tile.index - 1].draw(si, model);
+                    if (tile.index > 0 and tile.index <= assets.tile_node_indices.len) {
+                        assets.citykit_model.drawNode(si, model, assets.tile_node_indices[tile.index - 1]);
+                    }
                 }
             }
         }
     }
 
     const model = muln(&.{
-        la.translation(0.15 + 0.5, 1 + 0.5, 0.07 * 0.5),
+        la.translation(0.15 + 0.5, 1 + 0.5, 0.0723),
         la.rotation(180, .{ 0, 0, 1 }),
-        la.scale(0.1, 0.1, 0.1),
+        la.scale(0.5, 0.5, 0.5),
     });
-    assets.model_car_small.draw(si, model);
+    assets.citykit_model.drawNode(si, model, assets.car_small_node_index);
 }
 
-fn draw_ghost_preview(cursor_pos: vec3) void {
-    if (current_tile.index == 0) return;
-
+fn draw_ghost_preview(projection: mat4, view: mat4, cursor_pos: vec3) void {
     const x: i32 = @intFromFloat(@round(cursor_pos[0] - 0.5));
     const y: i32 = @intFromFloat(@round(cursor_pos[1] - 0.5));
 
-    gl.Enable(gl.BLEND);
-    gl.BlendFunc(gl.SRC_ALPHA, gl.ONE);
-    // Use a simpler shader or just modulate alpha if possible.
-    // The current shader might not support alpha transparency easily if it's deferred or specific.
-    // But since we are drawing into gbuffer, it might be tricky.
-    // Actually, gbuffer usually doesn't handle transparency well.
-    // Let's draw it after gbuffer if we want true transparency,
-    // OR just draw it into gbuffer with a special flag.
-    // For now, let's just draw it into the gbuffer and see.
+    var target_tile = current_tile;
+    var preview_color: [4]f32 = .{ 1.0, 1.0, 1.0, 0.5 };
+
+    if (current_tile.index == 0) {
+        // If delete tool, use the old tile but tinted red
+        const old_tile = tilemap.get_tile(x, y);
+        if (old_tile.index == 0) return; // Nothing to delete
+        target_tile = old_tile;
+        preview_color = .{ 1.0, 0.0, 0.0, 0.5 };
+    } else if (tilemap_pkg.is_building(current_tile.index)) {
+        target_tile.rot = tilemap.get_building_orientation(x, y);
+    } else if (tilemap_pkg.is_street(current_tile.index)) {
+        target_tile = tilemap.get_street_autotile(x, y);
+    } else if (tilemap_pkg.is_park(current_tile.index)) {
+        preview_color = .{ 0.2, 0.8, 0.2, 0.5 };
+    }
+
+    // Disable color write for depth pre-pass
+    gl.ColorMask(gl.FALSE, gl.FALSE, gl.FALSE, gl.FALSE);
+    gl.DepthFunc(gl.GREATER); // Reverse Z
 
     const model = muln(&.{
-        la.translation(i2f(x) + 0.5, i2f(y) + 0.5, 0.01),
-        la.rotation(i2f(current_tile.rot) * 90, .{ 0, 0, 1 }),
+        la.translation(i2f(x) + 0.5, i2f(y) + 0.5, 0.0),
+        la.rotation(i2f(target_tile.rot) * 90, .{ 0, 0, 1 }),
         la.scale(0.5, 0.5, 0.5),
     });
 
     const si: Model.ShaderInfo = .{ .model_loc = shaders.default.u_model };
-    assets.model_tiles[current_tile.index - 1].draw(si, model);
+    if (target_tile.index > 0 and target_tile.index <= assets.tile_node_indices.len) {
+        assets.citykit_model.drawNode(si, model, assets.tile_node_indices[target_tile.index - 1]);
+    }
 
+    // Re-enable color write, set depth to EQUAL, enable blending
+    gl.ColorMask(gl.TRUE, gl.TRUE, gl.TRUE, gl.TRUE);
+    gl.DepthFunc(gl.EQUAL);
+    gl.Enable(gl.BLEND);
     gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    gl.UseProgram(shaders.ghost.program);
+    gl.Uniform4f(shaders.ghost.u_tint, preview_color[0], preview_color[1], preview_color[2], preview_color[3]);
+
+    gl.UniformMatrix4fv(shaders.ghost.u_projection, 1, gl.FALSE, @ptrCast(&projection));
+    gl.UniformMatrix4fv(shaders.ghost.u_view, 1, gl.FALSE, @ptrCast(&view));
+
+    const si_ghost: Model.ShaderInfo = .{ .model_loc = shaders.ghost.u_model };
+    if (target_tile.index > 0 and target_tile.index <= assets.tile_node_indices.len) {
+        assets.citykit_model.drawNode(si_ghost, model, assets.tile_node_indices[target_tile.index - 1]);
+    }
+
+    // Restore state
+    gl.UseProgram(shaders.default.program);
+    gl.DepthFunc(gl.GREATER);
+    gl.Disable(gl.BLEND);
 }
 
-fn draw_tilepicker(frame_arena: std.mem.Allocator, projection: mat4) !void {
+fn draw_toolbar(_: std.mem.Allocator, projection: mat4) !void {
+    const num_tools = 4;
+    const tile_width: f32 = 64;
+    const pad: f32 = 6;
+    const gap: f32 = 4;
+    const box_w: f32 = num_tools * tile_width + (num_tools - 1) * gap + 2 * pad; // +4 for border
+    const box_h: f32 = tile_width + 2 * pad;
+    toolbar_rect = .{
+        .x = video_width / 2.0 - box_w / 2.0,
+        .y = video_height - box_h, // Flush to bottom
+        .w = box_w,
+        .h = box_h,
+    };
+
     gfx.begin(&projection, &la.identity());
 
-    var box_path = try gfx.Path.init(frame_arena, 100);
-    box_path.rect_rounded(box, 4);
-    gfx.set_color(.{ 0.93, 0.91, 0.9, 1 });
-    gfx.fill_path(&box_path);
-    gfx.set_color(.{ 0.3, 0.3, 0.3, 1 });
-    gfx.set_stroke_width(2);
-    gfx.stroke_path(&box_path);
+    // Windows 2000 Colors
+    const color_face = gfx.Color{ 0.75, 0.75, 0.75, 1.0 }; // #C0C0C0
+    const color_light = gfx.Color{ 1.0, 1.0, 1.0, 1.0 };
+    const color_shadow = gfx.Color{ 0.5, 0.5, 0.5, 1.0 };
+    const color_dark = gfx.Color{ 0.0, 0.0, 0.0, 1.0 };
 
-    gfx.set_color(.{ 0, 0, 0, 1 });
-    var text_rot: [6]u8 = "rot: 0".*;
-    text_rot[5] += current_tile.rot;
-    gfx.set_font_id(0);
-    gfx.set_font_size(16);
-    gfx.draw_text("TILE PICKER", box.x + 8, box.y + 8);
-    gfx.draw_text(&text_rot, box.x + 8, box.y + 32);
+    // Draw Main Toolbar Box
+    gfx.set_color(color_face);
+    gfx.fill_rect(toolbar_rect);
 
-    if (true) {
-        gl.Enable(gl.DEPTH_TEST);
-        defer gl.Disable(gl.DEPTH_TEST);
+    // Toolbar Outer Bevel
+    // Top & Left (Light)
+    gfx.set_color(color_light);
+    gfx.fill_rect(.{ .x = toolbar_rect.x, .y = toolbar_rect.y, .w = toolbar_rect.w, .h = 1 });
+    gfx.fill_rect(.{ .x = toolbar_rect.x, .y = toolbar_rect.y, .w = 1, .h = toolbar_rect.h });
+    // Bottom & Right (Shadow)
+    gfx.set_color(color_shadow);
+    gfx.fill_rect(.{ .x = toolbar_rect.x, .y = toolbar_rect.y + toolbar_rect.h - 1, .w = toolbar_rect.w, .h = 1 });
+    gfx.fill_rect(.{ .x = toolbar_rect.x + toolbar_rect.w - 1, .y = toolbar_rect.y, .w = 1, .h = toolbar_rect.h });
 
-        // draw tiles on buttons
-        gl.UseProgram(shaders.default.program);
-        // gl.BindTexture(gl.TEXTURE_2D, tile_texture);
-        gl.UniformMatrix4fv(shaders.default.u_projection, 1, gl.FALSE, @ptrCast(&projection));
-        gl.UniformMatrix4fv(shaders.default.u_view, 1, gl.FALSE, @ptrCast(&la.identity()));
+    const active_index: usize = if (current_tile.index == 0) 0 else if (tilemap_pkg.is_building(current_tile.index)) 1 else if (tilemap_pkg.is_street(current_tile.index)) 2 else if (tilemap_pkg.is_park(current_tile.index)) 3 else 0;
 
-        gl.EnableVertexAttribArray(0);
-        gl.EnableVertexAttribArray(1);
-        gl.EnableVertexAttribArray(2);
-        gl.DisableVertexAttribArray(3);
-        const tile_width = 48;
-        const tile_height = 32;
-        const ncols = 3;
-        const pad = 28;
-        for (assets.model_tiles[0..], 0..) |*tile, i| {
-            const x: f32 = box.x + i2f(i % ncols) * (tile_width) + pad;
-            var y: f32 = box.y + 64 + i2f(i / ncols) * (tile_height + pad) + pad;
-            if ((i % ncols) == 1) y += (tile_height + pad) / 2;
-            const hover = math.point_in_rect(input.mx, input.my, x, y, tile_width, tile_width);
-            const scale: f32 = if (hover) 0.6 else 0.5;
-            const iso = muln(&.{
-                la.scale(-scale, scale, scale),
-                la.rotation(45, .{ 1, 0, 0 }),
-                la.rotation(if (hover) time.seconds * 360 else 225, .{ 0, 0, 1 }),
-            });
-            const model = muln(&.{
-                la.translation(x + 24, y + 16, -32),
-                iso,
-                la.scale(tile_width, tile_width, tile_width),
-            });
-            tile.draw(.{ .model_loc = shaders.default.u_model }, model);
+    var new_active_index: ?usize = null;
 
-            if (input.framedown and hover) {
-                current_tile.index = @intCast(i + 1);
-            }
+    const icon_textures = [_]gl.uint{
+        assets.tex_bulldozer,
+        assets.tex_buildings,
+        assets.tex_streets,
+        assets.tex_park,
+    };
+
+    for (0..4) |i| {
+        const cx = toolbar_rect.x + pad + i2f(i) * (tile_width + gap);
+        const cy = toolbar_rect.y + pad;
+        const hover = math.point_in_rect(input.mx, input.my, cx, cy, tile_width, tile_width);
+
+        if (hover and input.framedown) {
+            new_active_index = i;
         }
+
+        const pressed = (active_index == i);
+
+        // Draw Button Bevel
+        if (pressed) {
+            // Sunken Look
+            // Top & Left (Dark)
+            gfx.set_color(color_dark);
+            gfx.fill_rect(.{ .x = cx, .y = cy, .w = tile_width, .h = 1 });
+            gfx.fill_rect(.{ .x = cx, .y = cy, .w = 1, .h = tile_width });
+            // Inner Top & Left (Shadow)
+            gfx.set_color(color_shadow);
+            gfx.fill_rect(.{ .x = cx + 1, .y = cy + 1, .w = tile_width - 1, .h = 1 });
+            gfx.fill_rect(.{ .x = cx + 1, .y = cy + 1, .w = 1, .h = tile_width - 1 });
+            // Bottom & Right (Light)
+            gfx.set_color(color_light);
+            gfx.fill_rect(.{ .x = cx, .y = cy + tile_width - 1, .w = tile_width, .h = 1 });
+            gfx.fill_rect(.{ .x = cx + tile_width - 1, .y = cy, .w = 1, .h = tile_width });
+        } else {
+            // Raised Look
+            // Top & Left (Light)
+            gfx.set_color(color_light);
+            gfx.fill_rect(.{ .x = cx, .y = cy, .w = tile_width, .h = 1 });
+            gfx.fill_rect(.{ .x = cx, .y = cy, .w = 1, .h = tile_width });
+            // Bottom & Right (Dark)
+            gfx.set_color(color_dark);
+            gfx.fill_rect(.{ .x = cx, .y = cy + tile_width - 1, .w = tile_width, .h = 1 });
+            gfx.fill_rect(.{ .x = cx + tile_width - 1, .y = cy, .w = 1, .h = tile_width });
+            // Inner Bottom & Right (Shadow)
+            gfx.set_color(color_shadow);
+            gfx.fill_rect(.{ .x = cx + 1, .y = cy + tile_width - 2, .w = tile_width - 2, .h = 1 });
+            gfx.fill_rect(.{ .x = cx + tile_width - 2, .y = cy + 1, .w = 1, .h = tile_width - 2 });
+        }
+
+        // Icon
+        const icon_padding: f32 = 4;
+        const icon_size = tile_width - 2 * icon_padding;
+        const offset: f32 = if (pressed) 1.0 else 0.0;
+
+        if (hover and !pressed) {
+            gfx.set_color(.{ 1.2, 1.2, 1.2, 1.0 });
+        } else {
+            gfx.set_color(.{ 1, 1, 1, 1 });
+        }
+
+        const icon_rect = gfx.Rect{ .x = cx + icon_padding + offset, .y = cy + icon_padding + offset, .w = icon_size, .h = icon_size };
+        gfx.set_texture(icon_textures[i], icon_rect);
+        gfx.fill_rect(icon_rect);
+        gfx.set_texture(0, .zero);
+    }
+
+    if (new_active_index) |idx| {
+        if (idx == 0) current_tile.index = 0;
+        if (idx == 1) {
+            // Randomize building type if already selected
+            if (tilemap_pkg.is_building(current_tile.index)) {
+                current_building_type = prng.random().int(u3);
+            }
+            current_tile.index = assets.tile_building_a + current_building_type;
+        }
+        if (idx == 2) current_tile.index = assets.tile_road_straight;
+        if (idx == 3) current_tile.index = 14; // Park
     }
 }
 

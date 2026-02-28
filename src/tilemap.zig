@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const wasm = @import("engine/web/wasm.zig");
+const assets = @import("assets.zig");
 
 pub const chunk_size = 8;
 
@@ -29,6 +30,7 @@ pub const TileChunk = struct {
 pub const TileInfo = struct {
     is_street: bool = false,
     is_building: bool = false,
+    is_park: bool = false,
 };
 
 pub const tile_infos = [_]TileInfo{
@@ -45,6 +47,7 @@ pub const tile_infos = [_]TileInfo{
     .{ .is_street = true }, // road_crossing (11)
     .{ .is_street = true }, // road_tsplit (12)
     .{ .is_street = true }, // road_junction (13)
+    .{ .is_park = true }, // park (14)
 };
 
 pub fn is_street(index: u6) bool {
@@ -56,6 +59,24 @@ pub fn is_building(index: u6) bool {
     if (index == 0 or index > tile_infos.len) return false;
     return tile_infos[index - 1].is_building;
 }
+
+pub fn is_park(index: u6) bool {
+    if (index == 0 or index > tile_infos.len) return false;
+    return tile_infos[index - 1].is_park;
+}
+
+pub const StreetTile = struct {
+    index: u6,
+    mask: u4, // bit 0: North, bit 1: East, bit 2: South, bit 3: West
+};
+
+pub const tile_set = [_]StreetTile{
+    .{ .index = assets.tile_road_straight, .mask = 0b0101 }, // North(1) | South(4)
+    .{ .index = assets.tile_road_crossing, .mask = 0b0101 }, // North(1) | South(4)
+    .{ .index = assets.tile_road_corner, .mask = 0b0110 }, // East(2) | South(4)
+    .{ .index = assets.tile_road_tsplit, .mask = 0b0111 }, // North(1) | East(2) | South(4)
+    .{ .index = assets.tile_road_junction, .mask = 0b1111 }, // North(1) | East(2) | South(4) | West(8)
+};
 
 pub const TileMap = struct {
     allocator: std.mem.Allocator,
@@ -76,14 +97,20 @@ pub const TileMap = struct {
         self.chunks.deinit();
     }
 
-    pub fn get_tile(self: *TileMap, x: i32, y: i32) Tile {
+    pub fn get_tile(self: *const TileMap, x: i32, y: i32) Tile {
         const key = LocationKey.from_pos(x, y);
-        if (self.chunks.get(key)) |chunk| {
-            const lx: usize = @intCast(@mod(x, chunk_size));
-            const ly: usize = @intCast(@mod(y, chunk_size));
-            return chunk.tiles[ly][lx];
-        }
-        return .{};
+        const chunk = self.chunks.get(key) orelse return .{};
+        const lx: usize = @intCast(@mod(x, chunk_size));
+        const ly: usize = @intCast(@mod(y, chunk_size));
+        return chunk.tiles[ly][lx];
+    }
+
+    pub fn get_building_orientation(self: *const TileMap, x: i32, y: i32) u2 {
+        if (is_street(self.get_tile(x, y - 1).index)) return 0;
+        if (is_street(self.get_tile(x + 1, y).index)) return 1;
+        if (is_street(self.get_tile(x, y + 1).index)) return 2;
+        if (is_street(self.get_tile(x - 1, y).index)) return 3;
+        return 0;
     }
 
     pub fn set_tile(self: *TileMap, x: i32, y: i32, tile: Tile) !void {
@@ -115,6 +142,46 @@ pub const TileMap = struct {
         return chunk;
     }
 
+    pub fn get_street_autotile(self: *const TileMap, x: i32, y: i32) Tile {
+        const neighbors = [_][2]i32{
+            .{ 0, 1 }, // North
+            .{ 1, 0 }, // East
+            .{ 0, -1 }, // South
+            .{ -1, 0 }, // West
+        };
+
+        var mask: u4 = 0;
+        for (neighbors, 0..) |offset, i| {
+            const nx = x + offset[0];
+            const ny = y + offset[1];
+            if (is_street(self.get_tile(nx, ny).index)) {
+                mask |= @as(u4, 1) << @intCast(i);
+            }
+        }
+
+        var best_score: u32 = 9999;
+        var res: Tile = .{ .index = assets.tile_road_straight, .rot = 0 };
+
+        for (tile_set) |st| {
+            var rot: u2 = 0;
+            while (true) {
+                const rotated_mask = std.math.rotr(u4, st.mask, rot);
+                const missing = @as(u32, @popCount(~rotated_mask & mask));
+                const extra = @as(u32, @popCount(rotated_mask & ~mask));
+                const score = missing * 10 + extra;
+
+                if (score < best_score) {
+                    best_score = score;
+                    res = .{ .index = st.index, .rot = rot };
+                }
+
+                if (rot == 3) break;
+                rot += 1;
+            }
+        }
+        return res;
+    }
+
     pub fn autotile_street(self: *TileMap, x: i32, y: i32) !void {
         const neighbors = [_][2]i32{
             .{ 0, 1 }, // North
@@ -132,24 +199,27 @@ pub const TileMap = struct {
             }
         }
 
-        const res: Tile = switch (mask) {
-            0 => .{ .index = 9, .rot = 0 },
-            1 => .{ .index = 9, .rot = 0 },
-            2 => .{ .index = 9, .rot = 1 },
-            3 => .{ .index = 10, .rot = 2 },
-            4 => .{ .index = 9, .rot = 0 },
-            5 => .{ .index = 9, .rot = 0 },
-            6 => .{ .index = 10, .rot = 1 },
-            7 => .{ .index = 12, .rot = 1 },
-            8 => .{ .index = 9, .rot = 1 },
-            9 => .{ .index = 10, .rot = 3 },
-            10 => .{ .index = 9, .rot = 1 },
-            11 => .{ .index = 12, .rot = 2 },
-            12 => .{ .index = 10, .rot = 0 },
-            13 => .{ .index = 12, .rot = 3 },
-            14 => .{ .index = 12, .rot = 0 },
-            15 => .{ .index = 11, .rot = 0 },
-        };
+        var best_score: u32 = 9999;
+        var res: Tile = .{ .index = assets.tile_road_straight, .rot = 0 };
+
+        for (tile_set) |st| {
+            var rot: u2 = 0;
+            while (true) {
+                const rotated_mask = std.math.rotr(u4, st.mask, rot);
+                const missing = @as(u32, @popCount(~rotated_mask & mask));
+                const extra = @as(u32, @popCount(rotated_mask & ~mask));
+                // Weight missing connections heavily so we prioritize fully connecting paths
+                const score = missing * 10 + extra;
+
+                if (score < best_score) {
+                    best_score = score;
+                    res = .{ .index = st.index, .rot = rot };
+                }
+
+                if (rot == 3) break;
+                rot += 1;
+            }
+        }
 
         const key = LocationKey.from_pos(x, y);
         const chunk = if (self.chunks.get(key)) |c| c else try self.alloc_chunk(key);
@@ -180,67 +250,51 @@ pub const TileMap = struct {
         const index = @as(u6, @intCast(random.intRangeAtMost(usize, 1, 8)));
 
         var rot: u2 = 0;
-        if (is_street(self.get_tile(x, y - 1).index)) rot = 0 else if (is_street(self.get_tile(x - 1, y).index)) rot = 1 else if (is_street(self.get_tile(x, y + 1).index)) rot = 2 else if (is_street(self.get_tile(x + 1, y).index)) rot = 3 else rot = random.int(u2);
+        if (is_street(self.get_tile(x, y - 1).index)) rot = 0 else if (is_street(self.get_tile(x + 1, y).index)) rot = 1 else if (is_street(self.get_tile(x, y + 1).index)) rot = 2 else if (is_street(self.get_tile(x - 1, y).index)) rot = 3 else rot = random.int(u2);
 
         try self.set_tile(x, y, .{ .index = index, .rot = rot });
     }
 
-    pub fn save_state(self: *TileMap) !void {
-        var out_list = std.ArrayList(u8).empty;
-        defer out_list.deinit(self.allocator);
+    pub fn place_park(self: *TileMap, x: i32, y: i32) !void {
+        try self.set_tile(x, y, .{ .index = 14, .rot = 0 });
+    }
 
+    pub fn save(self: *TileMap, writer: anytype) !void {
         const count: u32 = @intCast(self.chunks.count());
-        try out_list.appendSlice(self.allocator, std.mem.asBytes(&count));
+        try writer.writeInt(u32, count, .little);
 
         var iterator = self.chunks.iterator();
         while (iterator.next()) |entry| {
-            try out_list.appendSlice(self.allocator, std.mem.asBytes(&entry.key_ptr.*));
-            try out_list.appendSlice(self.allocator, std.mem.asBytes(&entry.value_ptr.*.tiles));
-        }
-
-        if (builtin.cpu.arch.isWasm()) {
-            wasm.js_save_state(out_list.items);
+            try writer.writeAll(std.mem.asBytes(&entry.key_ptr.*));
+            try writer.writeAll(std.mem.asBytes(&entry.value_ptr.*.tiles));
         }
     }
 
-    pub fn load_state(self: *TileMap) !void {
-        if (builtin.cpu.arch.isWasm()) {
-            const size = wasm.js_get_state_size();
-            if (size == 0) return;
-            const buf = try self.allocator.alloc(u8, size);
-            defer self.allocator.free(buf);
-            wasm.js_read_state(buf);
+    pub fn load(self: *TileMap, reader: anytype) !void {
+        var iterator = self.chunks.iterator();
+        while (iterator.next()) |entry| {
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.chunks.clearAndFree();
 
-            var stream = std.io.fixedBufferStream(buf);
-            const reader = stream.reader();
+        const count = try reader.readInt(u32, .little);
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            var key: LocationKey = undefined;
+            try reader.readNoEof(std.mem.asBytes(&key));
 
-            var iterator = self.chunks.iterator();
-            while (iterator.next()) |entry| {
-                self.allocator.destroy(entry.value_ptr.*);
-            }
-            self.chunks.clearAndFree();
+            var tiles: [chunk_size][chunk_size]Tile = undefined;
+            try reader.readNoEof(std.mem.asBytes(&tiles));
 
-            const count = reader.readInt(u32, .little) catch return;
-            var i: u32 = 0;
-            while (i < count) : (i += 1) {
-                var key: LocationKey = undefined;
-                const bytes_read_key = reader.readAll(std.mem.asBytes(&key)) catch return;
-                if (bytes_read_key != @sizeOf(LocationKey)) return;
-
-                var tiles: [chunk_size][chunk_size]Tile = undefined;
-                const bytes_read_tiles = reader.readAll(std.mem.asBytes(&tiles)) catch return;
-                if (bytes_read_tiles != @sizeOf(@TypeOf(tiles))) return;
-
-                const chunk = try self.allocator.create(TileChunk);
-                chunk.tiles = tiles;
-                chunk.count = 0;
-                for (tiles) |row| {
-                    for (row) |tile_val| {
-                        if (tile_val.index != 0) chunk.count += 1;
-                    }
+            const chunk = try self.allocator.create(TileChunk);
+            chunk.tiles = tiles;
+            chunk.count = 0;
+            for (tiles) |row| {
+                for (row) |tile_val| {
+                    if (tile_val.index != 0) chunk.count += 1;
                 }
-                try self.chunks.put(key, chunk);
             }
+            try self.chunks.put(key, chunk);
         }
     }
 

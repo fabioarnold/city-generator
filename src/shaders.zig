@@ -15,6 +15,15 @@ pub const blit_shader = struct {
     pub var u_texture: gl.int = undefined;
 };
 
+pub const background = struct {
+    pub var program: gl.uint = undefined;
+    pub var u_view: gl.int = undefined;
+    pub var u_fov: gl.int = undefined;
+    pub var u_resolution: gl.int = undefined;
+    pub var u_sun_pos: gl.int = undefined;
+    pub var u_grass_tex: gl.int = undefined;
+};
+
 pub const gfx_shader = struct {
     pub var program: gl.uint = undefined;
     pub var u_projection: gl.int = undefined;
@@ -45,11 +54,28 @@ pub const default = struct {
     pub var u_projection: gl.int = undefined;
     pub var u_view: gl.int = undefined;
     pub var u_model: gl.int = undefined;
+    pub var u_tint: gl.int = undefined;
 };
 
 pub const cavity = struct {
     pub var program: gl.uint = undefined;
     pub var u_pixel: gl.int = undefined;
+};
+
+pub const solid_color = struct {
+    pub var program: gl.uint = undefined;
+    pub var u_projection: gl.int = undefined;
+    pub var u_view: gl.int = undefined;
+    pub var u_model: gl.int = undefined;
+    pub var u_color: gl.int = undefined;
+};
+
+pub const ghost = struct {
+    pub var program: gl.uint = undefined;
+    pub var u_projection: gl.int = undefined;
+    pub var u_view: gl.int = undefined;
+    pub var u_model: gl.int = undefined;
+    pub var u_tint: gl.int = undefined;
 };
 
 pub fn load() !void {
@@ -65,6 +91,15 @@ pub fn load() !void {
         gl.UseProgram(blit_shader.program);
         blit_shader.u_texture = gl.GetUniformLocation(blit_shader.program, "u_texture");
         gl.Uniform1i(blit_shader.u_texture, 0);
+    }
+    {
+        background.program = try load_shader(@embedFile("shaders/blit.vert"), @embedFile("shaders/background.frag"));
+        gl.UseProgram(background.program);
+        background.u_view = gl.GetUniformLocation(background.program, "u_view");
+        background.u_fov = gl.GetUniformLocation(background.program, "u_fov");
+        background.u_resolution = gl.GetUniformLocation(background.program, "u_resolution");
+        background.u_sun_pos = gl.GetUniformLocation(background.program, "u_sun_pos");
+        background.u_grass_tex = gl.GetUniformLocation(background.program, "u_grass_tex");
     }
     {
         gfx_shader.program = try load_shader(@embedFile("shaders/gfx.vert"), @embedFile("shaders/gfx.frag"));
@@ -94,6 +129,23 @@ pub fn load() !void {
         default.u_view = gl.GetUniformLocation(default.program, "u_view");
         default.u_model = gl.GetUniformLocation(default.program, "u_model");
         gl.Uniform1i(gl.GetUniformLocation(default.program, "u_colormap"), 0);
+    }
+    {
+        solid_color.program = try load_shader(@embedFile("shaders/default.vert"), @embedFile("shaders/solid_color.frag"));
+        gl.UseProgram(solid_color.program);
+        solid_color.u_projection = gl.GetUniformLocation(solid_color.program, "u_projection");
+        solid_color.u_view = gl.GetUniformLocation(solid_color.program, "u_view");
+        solid_color.u_model = gl.GetUniformLocation(solid_color.program, "u_model");
+        solid_color.u_color = gl.GetUniformLocation(solid_color.program, "u_color");
+    }
+    {
+        ghost.program = try load_shader(@embedFile("shaders/default.vert"), @embedFile("shaders/ghost.frag"));
+        gl.UseProgram(ghost.program);
+        ghost.u_projection = gl.GetUniformLocation(ghost.program, "u_projection");
+        ghost.u_view = gl.GetUniformLocation(ghost.program, "u_view");
+        ghost.u_model = gl.GetUniformLocation(ghost.program, "u_model");
+        ghost.u_tint = gl.GetUniformLocation(ghost.program, "u_tint");
+        gl.Uniform1i(gl.GetUniformLocation(ghost.program, "u_colormap"), 0);
     }
     {
         cavity.program = try load_shader(@embedFile("shaders/blit.vert"), @embedFile("shaders/cavity.frag"));
