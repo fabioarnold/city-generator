@@ -1,7 +1,7 @@
 const std = @import("std");
 const log = std.log.scoped(.shaders);
 const gl = @import("gl");
-const la = @import("linear_algebra.zig");
+const la = @import("engine/linear_algebra.zig");
 
 pub const debug_shader = struct {
     pub var program: gl.uint = undefined;

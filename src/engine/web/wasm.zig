@@ -17,6 +17,18 @@ pub fn open_link(url: []const u8) void {
     wasm_open_link(url.ptr, url.len);
 }
 
+pub fn js_save_state(data: []const u8) void {
+    wasm_save_state(data.ptr, data.len);
+}
+
+pub fn js_get_state_size() usize {
+    return wasm_get_state_size();
+}
+
+pub fn js_read_state(buffer: []u8) void {
+    wasm_read_state(buffer.ptr, buffer.len);
+}
+
 pub fn key_down(key: KeyCode) bool {
     return wasm_key_down(@intFromEnum(key));
 }
@@ -75,21 +87,29 @@ extern fn wasm_button_down(gamepad_index: c_uint, button_index: c_uint) callconv
 extern fn wasm_stick_x(gamepad_index: c_uint, stick_index: c_uint) callconv(.c) f32;
 extern fn wasm_stick_y(gamepad_index: c_uint, stick_index: c_uint) callconv(.c) f32;
 
-export fn on_mouse_move(x: f32, y: f32) void {
+extern fn wasm_save_state(ptr: [*]const u8, len: usize) callconv(.c) void;
+extern fn wasm_get_state_size() callconv(.c) usize;
+extern fn wasm_read_state(ptr: [*]u8, len: usize) callconv(.c) void;
+
+export fn on_mouse_move(x: f32, y: f32, dx: f32, dy: f32) void {
     input.mx = x;
     input.my = y;
+    input.mouse_dx += dx;
+    input.mouse_dy += dy;
 }
 
 export fn on_mouse_down(button: u32, x: f32, y: f32) void {
     input.mx = x;
     input.my = y;
     if (button == 0) input.framedown, input.down = .{ true, true };
+    if (button == 2) input.right_framedown, input.right_down = .{ true, true };
 }
 
 export fn on_mouse_up(button: u32, x: f32, y: f32) void {
     input.mx = x;
     input.my = y;
     if (button == 0) input.frameup, input.down = .{ true, false };
+    if (button == 2) input.right_frameup, input.right_down = .{ true, false };
 }
 
 export fn on_key_down(key: KeyCode) void {

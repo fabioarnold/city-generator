@@ -4,11 +4,14 @@ const sdl = @import("sdl3");
 
 pub var mx: f32 = 0;
 pub var my: f32 = 0;
-pub var mx_prev: f32 = 0;
-pub var my_prev: f32 = 0;
+pub var mouse_dx: f32 = 0;
+pub var mouse_dy: f32 = 0;
 pub var framedown: bool = false; // Transitioned down within this frame.
 pub var frameup: bool = false; // Transitioned up within this frame.
 pub var down: bool = false;
+pub var right_framedown: bool = false;
+pub var right_frameup: bool = false;
+pub var right_down: bool = false;
 
 pub fn key_down(key: KeyCode) bool {
     if (builtin.cpu.arch.isWasm()) {
@@ -22,8 +25,10 @@ pub fn key_down(key: KeyCode) bool {
 pub fn end_frame() void {
     framedown = false;
     frameup = false;
-    mx_prev = mx;
-    my_prev = my;
+    right_framedown = false;
+    right_frameup = false;
+    mouse_dx = 0;
+    mouse_dy = 0;
 }
 
 pub const KeyCode = enum(u32) {
@@ -151,6 +156,7 @@ pub const KeyCode = enum(u32) {
             .left => .left,
             .up => .up,
             .down => .down,
+            .shift => .lshift,
             else => @panic("not implemented"),
         };
     }

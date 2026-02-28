@@ -1,5 +1,5 @@
 const std = @import("std");
-const Model = @import("model.zig");
+const Model = @import("engine/model.zig");
 
 const model_building_a_glb align(4) = @embedFile("models/building_a.glb").*;
 const model_building_b_glb align(4) = @embedFile("models/building_b.glb").*;

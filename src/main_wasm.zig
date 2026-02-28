@@ -1,9 +1,9 @@
 const std = @import("std");
 const gl = @import("gl");
-const webgl = @import("web/gl.zig");
-const wasm = @import("web/wasm.zig");
-const time = @import("time.zig");
-const input = @import("input.zig");
+const webgl = @import("engine/web/gl.zig");
+const wasm = @import("engine/web/wasm.zig");
+const time = @import("engine/time.zig");
+const input = @import("engine/input.zig");
 const log = std.log.scoped(.main_wasm);
 const assert = std.debug.assert;
 const shaders = @import("shaders.zig");
@@ -69,4 +69,8 @@ export fn on_animation_frame() callconv(.c) void {
     app.draw(frame_arena);
 
     input.end_frame();
+}
+
+export fn on_save() callconv(.c) void {
+    app.save_state() catch |err| log.err("save error: {}", .{err});
 }

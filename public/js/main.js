@@ -72,7 +72,35 @@ const wasm_stick_y = (gamepad_index, stick_index) => {
 async function main() {
     const params = new URLSearchParams(window.location.search);
 
+
     init_webgl();
+
+    let saved_state = new Uint8Array(0);
+
+    const wasm_save_state = (ptr, len) => {
+        const array = new Uint8Array(memory.buffer, ptr, len);
+        let binary = '';
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(array[i]);
+        }
+        localStorage.setItem("city_map", btoa(binary));
+    };
+
+    const wasm_get_state_size = () => {
+        const b64 = localStorage.getItem("city_map");
+        if (!b64) return 0;
+        const binary = atob(b64);
+        saved_state = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            saved_state[i] = binary.charCodeAt(i);
+        }
+        return saved_state.length;
+    };
+
+    const wasm_read_state = (ptr, len) => {
+        const array = new Uint8Array(memory.buffer, ptr, len);
+        array.set(saved_state);
+    };
 
     const env = {
         wasm_performance_now,
@@ -84,6 +112,9 @@ async function main() {
         wasm_button_down,
         wasm_stick_x,
         wasm_stick_y,
+        wasm_save_state,
+        wasm_get_state_size,
+        wasm_read_state,
         ...webgl_env,
         // ...audio_env,
     };
@@ -96,13 +127,15 @@ async function main() {
     instance.exports.on_init();
     instance.exports.on_resize(innerWidth, innerHeight, devicePixelRatio);
     addEventListener("resize", () => instance.exports.on_resize(innerWidth, innerHeight, devicePixelRatio));
-    addEventListener("mousemove", e => instance.exports.on_mouse_move(e.x, e.y));
+    addEventListener("mousemove", e => instance.exports.on_mouse_move(e.x, e.y, e.movementX, e.movementY));
     addEventListener("mousedown", e => instance.exports.on_mouse_down(e.button, e.x, e.y));
     addEventListener("mouseup", e => instance.exports.on_mouse_up(e.button, e.x, e.y));
+    addEventListener("contextmenu", e => e.preventDefault());
     addEventListener("touchmove", e => instance.exports.on_mouse_move(e.touches[0].pageX, e.touches[0].pageY));
     addEventListener("touchstart", e => instance.exports.on_mouse_down(0, e.touches[0].pageX, e.touches[0].pageY));
     addEventListener("touchend", e => instance.exports.on_mouse_up(0, e.touches[0].pageX, e.touches[0].pageY));
     addEventListener("keydown", e => instance.exports.on_key_down(e.keyCode));
+    addEventListener("beforeunload", () => instance.exports.on_save());
 
     // setInterval(() => {
     //     instance.exports.on_fixed_update(10);

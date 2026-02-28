@@ -3,15 +3,13 @@ const log = std.log.scoped(.main);
 const sdl = @import("sdl3");
 const gl = @import("gl");
 const shaders = @import("shaders.zig");
-const gfx = @import("gfx.zig");
-const input = @import("input.zig");
-const time = @import("time.zig");
-const math = @import("math.zig");
-const debug_draw = @import("debug_draw.zig");
-const la = @import("linear_algebra.zig");
+const gfx = @import("engine/gfx.zig");
+const input = @import("engine/input.zig");
+const time = @import("engine/time.zig");
+const math = @import("engine/math.zig");
+const debug_draw = @import("engine/debug_draw.zig");
+const la = @import("engine/linear_algebra.zig");
 const app = @import("app.zig");
-const tiles = @import("tiles/tiles.zig");
-const tile_data = @import("tiles/tile_data.zig");
 const vec3 = la.vec3;
 const vec4 = la.vec4;
 const mat4 = la.mat4;
@@ -86,9 +84,16 @@ pub fn main() !void {
                 .mouse_motion => |mouse| {
                     input.mx = mouse.x;
                     input.my = mouse.y;
+                    input.mouse_dx += mouse.relative_x;
+                    input.mouse_dy += mouse.relative_y;
                 },
                 .mouse_button_down => |mouse| {
-                    input.framedown = mouse.button == .left;
+                    if (mouse.button == .left) input.framedown = true;
+                    if (mouse.button == .right) input.right_framedown = true;
+                },
+                .mouse_button_up => |mouse| {
+                    if (mouse.button == .left) input.frameup = true;
+                    if (mouse.button == .right) input.right_frameup = true;
                 },
                 else => {},
             }
@@ -96,6 +101,7 @@ pub fn main() !void {
 
         const mouse_state = sdl.mouse.getState();
         input.down = mouse_state.flags.left;
+        input.right_down = mouse_state.flags.right;
 
         const window_size = try window.getSize();
         const pixel_size = try window.getSizeInPixels();

@@ -8,7 +8,7 @@ const quat = la.vec4;
 const mat4 = la.mat4;
 const gl = @import("gl");
 const web_gl = @import("web/gl.zig");
-const shaders = @import("shaders.zig");
+const shaders = @import("../shaders.zig");
 
 const Model = @This();
 
@@ -77,7 +77,7 @@ pub fn load(self: *Model, allocator: std.mem.Allocator, data: []align(4) const u
             const image = self.gltf.data.images[source];
             const mime = image.mime_type.?;
             const sampler = self.gltf.data.samplers[texture.sampler.?]; // TODO set filter, wrap
-            
+
             if (builtin.cpu.arch.isWasm()) {
                 self.textures[i] = web_gl.loadTextureIMG(
                     image.data.?,
