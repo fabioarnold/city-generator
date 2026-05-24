@@ -50,6 +50,10 @@ var traffic_sim: traffic_pkg.Simulation = undefined;
 var allocator: std.mem.Allocator = undefined;
 
 var gbuffer: GBuffer = undefined;
+var ssao_enabled: bool = true;
+var ssao_kernel: [64 * 3]f32 = undefined;
+var tex_ssao_noise: gl.uint = 0;
+var tex_ssao_white: gl.uint = 0;
 
 var toolbar_rect: gfx.Rect = .{
     .x = 0,
@@ -99,6 +103,7 @@ pub fn init(arena: std.mem.Allocator) !void {
 
     gbuffer = .init(640, 400);
     try gbuffer.create();
+    init_ssao();
 
     tilemap = tilemap_pkg.TileMap.init(arena);
     traffic_sim = traffic_pkg.Simulation.init(arena);
@@ -235,6 +240,8 @@ pub fn draw(frame_arena: std.mem.Allocator) void {
 
     gfx.begin_frame(frame_arena, video_scale);
     draw_scene_to_gbuffer(projection, view, cursor_pos);
+    draw_ssao(projection);
+    draw_ssao_blur();
     draw_post_process();
     traffic_sim.draw_debug_paths(projection, view);
 
@@ -355,11 +362,15 @@ fn draw_background(view: mat4, fov: f32, sun_pos: vec3) void {
 }
 
 fn draw_post_process() void {
+    gl.Viewport(0, 0, gbuffer.width, gbuffer.height);
+    gl.ActiveTexture(gl.TEXTURE0);
     gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_color);
     gl.ActiveTexture(gl.TEXTURE1);
     gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_normal);
     gl.ActiveTexture(gl.TEXTURE2);
     gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_depth);
+    gl.ActiveTexture(gl.TEXTURE3);
+    gl.BindTexture(gl.TEXTURE_2D, if (ssao_enabled) gbuffer.tex_ssao_blur else tex_ssao_white);
     gl.ActiveTexture(gl.TEXTURE0);
     gl.UseProgram(shaders.cavity.program);
     gl.Uniform2f(shaders.cavity.u_pixel, video_scale / i2f(gbuffer.width), video_scale / i2f(gbuffer.height));
@@ -469,12 +480,57 @@ fn draw_ghost_preview(projection: mat4, view: mat4, cursor_pos: vec3) void {
     gl.Disable(gl.BLEND);
 }
 
+fn draw_toolbar_ao_button(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    hover: bool,
+    color_face: gfx.Color,
+    color_light: gfx.Color,
+    color_shadow: gfx.Color,
+    color_dark: gfx.Color,
+) void {
+    gfx.set_color(color_face);
+    gfx.fill_rect(.{ .x = x, .y = y, .w = w, .h = h });
+    const offset: f32 = if (ssao_enabled) 1.0 else 0.0;
+    if (ssao_enabled) {
+        gfx.set_color(color_dark);
+        gfx.fill_rect(.{ .x = x, .y = y, .w = w, .h = 1 });
+        gfx.fill_rect(.{ .x = x, .y = y, .w = 1, .h = h });
+        gfx.set_color(color_shadow);
+        gfx.fill_rect(.{ .x = x + 1, .y = y + 1, .w = w - 1, .h = 1 });
+        gfx.fill_rect(.{ .x = x + 1, .y = y + 1, .w = 1, .h = h - 1 });
+        gfx.set_color(color_light);
+        gfx.fill_rect(.{ .x = x, .y = y + h - 1, .w = w, .h = 1 });
+        gfx.fill_rect(.{ .x = x + w - 1, .y = y, .w = 1, .h = h });
+    } else {
+        gfx.set_color(color_light);
+        gfx.fill_rect(.{ .x = x, .y = y, .w = w, .h = 1 });
+        gfx.fill_rect(.{ .x = x, .y = y, .w = 1, .h = h });
+        gfx.set_color(color_dark);
+        gfx.fill_rect(.{ .x = x, .y = y + h - 1, .w = w, .h = 1 });
+        gfx.fill_rect(.{ .x = x + w - 1, .y = y, .w = 1, .h = h });
+        gfx.set_color(color_shadow);
+        gfx.fill_rect(.{ .x = x + 1, .y = y + h - 2, .w = w - 2, .h = 1 });
+        gfx.fill_rect(.{ .x = x + w - 2, .y = y + 1, .w = 1, .h = h - 2 });
+    }
+    gfx.set_font_id(0);
+    gfx.set_font_size(12);
+    const text_w = gfx.get_text_width("AO");
+    const text_h = gfx.get_text_height();
+    gfx.set_color(if (hover) gfx.Color{ 0.1, 0.1, 0.9, 1.0 } else color_dark);
+    gfx.draw_text("AO", x + (w - text_w) / 2.0 + offset, y + (h - text_h) / 2.0 + offset);
+}
+
 fn draw_toolbar(_: std.mem.Allocator, projection: mat4) !void {
     const num_tools = 4;
     const tile_width: f32 = 64;
     const pad: f32 = 6;
     const gap: f32 = 4;
-    const box_w: f32 = num_tools * tile_width + (num_tools - 1) * gap + 2 * pad; // +4 for border
+    const ao_btn_w: f32 = 40;
+    const ao_btn_h: f32 = 24;
+    const box_w: f32 = num_tools * tile_width + (num_tools - 1) * gap + 2 * pad + gap + ao_btn_w;
     const box_h: f32 = tile_width + 2 * pad;
     toolbar_rect = .{
         .x = video_width / 2.0 - box_w / 2.0,
@@ -585,6 +641,13 @@ fn draw_toolbar(_: std.mem.Allocator, projection: mat4) !void {
         gfx.set_texture(0, .zero);
     }
 
+    // AO toggle button: positioned to the right of the tool icons.
+    const ao_x = toolbar_rect.x + pad + i2f(num_tools) * (tile_width + gap);
+    const ao_y = toolbar_rect.y + (box_h - ao_btn_h) / 2.0;
+    const ao_hover = math.point_in_rect(input.mx, input.my, ao_x, ao_y, ao_btn_w, ao_btn_h);
+    if (ao_hover and input.framedown) ssao_enabled = !ssao_enabled;
+    draw_toolbar_ao_button(ao_x, ao_y, ao_btn_w, ao_btn_h, ao_hover, color_face, color_light, color_shadow, color_dark);
+
     if (changed_selection) {
         if (new_active_index) |idx| {
             selected_tool = switch (idx) {
@@ -607,6 +670,111 @@ fn draw_toolbar(_: std.mem.Allocator, projection: mat4) !void {
             .park => current_tile.index = 14, // Park
         }
     }
+}
+
+fn init_ssao() void {
+    // Hemisphere kernel: 64 samples biased toward the surface to catch
+    // nearby occlusion without over-darkening from distant geometry.
+    for (0..64) |i| {
+        const nx: f32 = prng.random().float(f32) * 2.0 - 1.0;
+        const ny: f32 = prng.random().float(f32) * 2.0 - 1.0;
+        const nz: f32 = prng.random().float(f32); // z > 0 keeps samples in front hemisphere
+        const sample_dir = la.normalize(vec3, .{ nx, ny, nz });
+        const fi: f32 = @floatFromInt(i);
+        const t: f32 = fi / 64.0;
+        const scale: f32 = 0.1 + t * t * 0.9; // quadratic acceleration toward origin
+        const sample = sample_dir * @as(vec3, @splat(scale));
+        ssao_kernel[i * 3 + 0] = sample[0];
+        ssao_kernel[i * 3 + 1] = sample[1];
+        ssao_kernel[i * 3 + 2] = sample[2];
+    }
+
+    // 4×4 noise texture with random tangent-space rotation vectors; tiled
+    // across the screen so every pixel uses a different hemisphere orientation.
+    var noise_data: [16 * 3]u8 = undefined;
+    for (0..16) |i| {
+        const rx: f32 = prng.random().float(f32);
+        const ry: f32 = prng.random().float(f32);
+        noise_data[i * 3 + 0] = @intFromFloat(rx * 255.0);
+        noise_data[i * 3 + 1] = @intFromFloat(ry * 255.0);
+        noise_data[i * 3 + 2] = 0;
+    }
+    gl.GenTextures(1, @ptrCast(&tex_ssao_noise));
+    std.debug.assert(tex_ssao_noise != 0);
+    gl.BindTexture(gl.TEXTURE_2D, tex_ssao_noise);
+    gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, 4, 4, 0, gl.RGB, gl.UNSIGNED_BYTE, &noise_data);
+    gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+
+    // 1×1 white texture bound as the AO map when SSAO is disabled, so the
+    // cavity shader multiplies by 1.0 and the image is unchanged.
+    const white: [4]u8 = .{ 255, 255, 255, 255 };
+    gl.GenTextures(1, @ptrCast(&tex_ssao_white));
+    std.debug.assert(tex_ssao_white != 0);
+    gl.BindTexture(gl.TEXTURE_2D, tex_ssao_white);
+    gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, &white);
+    gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+}
+
+fn draw_ssao(projection: mat4) void {
+    if (!ssao_enabled) return;
+    std.debug.assert(gbuffer.fbo_ssao != 0);
+    std.debug.assert(gbuffer.width > 0 and gbuffer.height > 0);
+
+    // Inverse of the reverse-Z infinite perspective, used to reconstruct
+    // view-space positions from depth buffer values in the SSAO shader.
+    const proj_inv = mat4{
+        .{ 1.0 / projection[0][0], 0, 0, 0 },
+        .{ 0, 1.0 / projection[1][1], 0, 0 },
+        .{ 0, 0, 0, 1.0 / projection[3][2] },
+        .{ 0, 0, -1.0, 0 },
+    };
+
+    gl.BindFramebuffer(gl.FRAMEBUFFER, gbuffer.fbo_ssao);
+    gl.Viewport(0, 0, gbuffer.width, gbuffer.height);
+
+    gl.ActiveTexture(gl.TEXTURE0);
+    gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_normal);
+    gl.ActiveTexture(gl.TEXTURE1);
+    gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_depth);
+    gl.ActiveTexture(gl.TEXTURE2);
+    gl.BindTexture(gl.TEXTURE_2D, tex_ssao_noise);
+    gl.ActiveTexture(gl.TEXTURE0);
+
+    gl.UseProgram(shaders.ssao.program);
+    gl.UniformMatrix4fv(shaders.ssao.u_projection, 1, gl.FALSE, @ptrCast(&projection));
+    gl.UniformMatrix4fv(shaders.ssao.u_proj_inv, 1, gl.FALSE, @ptrCast(&proj_inv));
+    gl.Uniform3fv(shaders.ssao.u_samples, 64, &ssao_kernel[0]);
+    gl.Uniform2f(shaders.ssao.u_noise_scale, i2f(gbuffer.width) / 4.0, i2f(gbuffer.height) / 4.0);
+    gl.Uniform1f(shaders.ssao.u_radius, 0.5);
+    gl.Uniform1f(shaders.ssao.u_bias, 0.025);
+
+    primitives.quad();
+    gl.BindFramebuffer(gl.FRAMEBUFFER, 0);
+}
+
+fn draw_ssao_blur() void {
+    if (!ssao_enabled) return;
+    std.debug.assert(gbuffer.fbo_ssao_blur != 0);
+    std.debug.assert(gbuffer.tex_ssao != 0);
+
+    gl.BindFramebuffer(gl.FRAMEBUFFER, gbuffer.fbo_ssao_blur);
+    gl.Viewport(0, 0, gbuffer.width, gbuffer.height);
+
+    gl.ActiveTexture(gl.TEXTURE0);
+    gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_ssao);
+    gl.ActiveTexture(gl.TEXTURE1);
+    gl.BindTexture(gl.TEXTURE_2D, gbuffer.tex_depth);
+    gl.ActiveTexture(gl.TEXTURE0);
+
+    gl.UseProgram(shaders.ssao_blur.program);
+    gl.Uniform2f(shaders.ssao_blur.u_pixel, 1.0 / i2f(gbuffer.width), 1.0 / i2f(gbuffer.height));
+
+    primitives.quad();
+    gl.BindFramebuffer(gl.FRAMEBUFFER, 0);
 }
 
 // Short helper function to make the code more readable.

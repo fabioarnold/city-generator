@@ -62,6 +62,21 @@ pub const cavity = struct {
     pub var u_pixel: gl.int = undefined;
 };
 
+pub const ssao = struct {
+    pub var program: gl.uint = undefined;
+    pub var u_projection: gl.int = undefined;
+    pub var u_proj_inv: gl.int = undefined;
+    pub var u_samples: gl.int = undefined;
+    pub var u_noise_scale: gl.int = undefined;
+    pub var u_radius: gl.int = undefined;
+    pub var u_bias: gl.int = undefined;
+};
+
+pub const ssao_blur = struct {
+    pub var program: gl.uint = undefined;
+    pub var u_pixel: gl.int = undefined;
+};
+
 pub const solid_color = struct {
     pub var program: gl.uint = undefined;
     pub var u_projection: gl.int = undefined;
@@ -153,7 +168,28 @@ pub fn load() !void {
         gl.Uniform1i(gl.GetUniformLocation(cavity.program, "u_colormap"), 0);
         gl.Uniform1i(gl.GetUniformLocation(cavity.program, "u_normalmap"), 1);
         gl.Uniform1i(gl.GetUniformLocation(cavity.program, "u_depthmap"), 2);
+        gl.Uniform1i(gl.GetUniformLocation(cavity.program, "u_aomap"), 3);
         cavity.u_pixel = gl.GetUniformLocation(cavity.program, "u_pixel");
+    }
+    {
+        ssao.program = try load_shader(@embedFile("shaders/blit.vert"), @embedFile("shaders/ssao.frag"));
+        gl.UseProgram(ssao.program);
+        gl.Uniform1i(gl.GetUniformLocation(ssao.program, "u_normalmap"), 0);
+        gl.Uniform1i(gl.GetUniformLocation(ssao.program, "u_depthmap"), 1);
+        gl.Uniform1i(gl.GetUniformLocation(ssao.program, "u_noise"), 2);
+        ssao.u_projection  = gl.GetUniformLocation(ssao.program, "u_projection");
+        ssao.u_proj_inv    = gl.GetUniformLocation(ssao.program, "u_proj_inv");
+        ssao.u_samples     = gl.GetUniformLocation(ssao.program, "u_samples");
+        ssao.u_noise_scale = gl.GetUniformLocation(ssao.program, "u_noise_scale");
+        ssao.u_radius      = gl.GetUniformLocation(ssao.program, "u_radius");
+        ssao.u_bias        = gl.GetUniformLocation(ssao.program, "u_bias");
+    }
+    {
+        ssao_blur.program = try load_shader(@embedFile("shaders/blit.vert"), @embedFile("shaders/ssao_blur.frag"));
+        gl.UseProgram(ssao_blur.program);
+        gl.Uniform1i(gl.GetUniformLocation(ssao_blur.program, "u_ssao"), 0);
+        gl.Uniform1i(gl.GetUniformLocation(ssao_blur.program, "u_depthmap"), 1);
+        ssao_blur.u_pixel = gl.GetUniformLocation(ssao_blur.program, "u_pixel");
     }
     {
         tile_shader.program = try load_shader(@embedFile("shaders/tile.vert"), @embedFile("shaders/tile.frag"));

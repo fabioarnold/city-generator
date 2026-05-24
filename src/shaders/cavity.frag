@@ -1,6 +1,7 @@
 uniform sampler2D u_colormap;
 uniform sampler2D u_normalmap;
 uniform sampler2D u_depthmap;
+uniform sampler2D u_aomap;
 
 uniform vec2 u_pixel;
 
@@ -54,8 +55,10 @@ void main() {
 
     out_color = texture(u_colormap, v_uv);
     out_color.rgb += 0.25 * curvature;
-
     out_color.rgb -= 0.25 * vec3(outline);
+
+    float ao = texture(u_aomap, v_uv).r;
+    out_color.rgb *= ao;
 
     // out_color.rgb = texture(u_normalmap, v_uv).rgb;
 }
